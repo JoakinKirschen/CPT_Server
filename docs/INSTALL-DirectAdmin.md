@@ -115,14 +115,17 @@ mkdir -p ~/domains/nightdust.eu/public_html/cpt-api
 cp public/index.php public/.htaccess ~/domains/nightdust.eu/public_html/cpt-api/
 ```
 
-The `.htaccess` file does three things:
+The `.htaccess` file does two things:
 
 - It sends every request to `index.php` (this needs `mod_rewrite`, which
-  DirectAdmin has on Apache and LiteSpeed).
+  DirectAdmin has on Apache and LiteSpeed). So no other file in the folder
+  is ever served.
 - It turns off directory listings.
-- It denies every other file in the folder.
 
-Nothing else from the repository belongs under `public_html`.
+Nothing else from the repository belongs under `public_html`. The file
+deliberately has no `FilesMatch` deny rule. Apache checks such a rule
+before the rewrite, against the requested name, so it refuses every API
+path with 403.
 
 ## 7. API keys
 
@@ -253,6 +256,7 @@ does this.
 | `server_misconfigured` | Either `config/config.php` is missing or unreadable, the pepper is shorter than 32 characters, or `$root` in `index.php` points to the wrong folder. |
 | `database_unavailable` | Wrong `db.*` settings. The details are in `var/log/errors-*.log`. |
 | `https_required` behind a proxy | Set `api.trust_forwarded_proto` to `true`, but only if the host's proxy sets `X-Forwarded-Proto`. |
-| Every path gives 404 from the web server | `mod_rewrite` or `.htaccess` is not active for the folder. |
+| Every path except `/cpt-api/` gives an HTML 404 from the web server | `.htaccess` is missing from `public_html/cpt-api` (Windows hides files starting with a dot; create it in DirectAdmin's Files instead), or `mod_rewrite` is off. |
+| HTML 403 Forbidden on every path | An older `.htaccess` with a `FilesMatch` deny rule; replace it with the current `public/.htaccess`. |
 | `upstream_unavailable` for every CPT | Outbound HTTPS to DOV is blocked or DOV is down. Check the probe output. |
 | `upstream_redirect` | DOV redirected somewhere other than its export URL for the same id (`/xdov/proxy/export/sondering/<id>`), so it has changed its URLs. The server deliberately follows only that one redirect. Run the probe again and send the output. |

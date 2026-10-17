@@ -1,4 +1,7 @@
 # Structural Canvas CPT library: send every request to index.php.
+# (No FilesMatch deny here: Apache checks it before the rewrite, against the
+# requested name, so it refused every API path. The folder holds only
+# index.php and this file, and every request is rewritten to index.php.)
 Options -Indexes -MultiViews
 
 <IfModule mod_rewrite.c>
@@ -6,13 +9,6 @@ Options -Indexes -MultiViews
     RewriteRule ^index\.php$ - [L]
     RewriteRule ^ index.php [L]
 </IfModule>
-
-# Nothing but index.php is ever served from this folder.
-<FilesMatch "^(?!index\.php$)">
-    <IfModule mod_authz_core.c>
-        Require all denied
-    </IfModule>
-</FilesMatch>
 
 <IfModule mod_headers.c>
     Header always set X-Content-Type-Options "nosniff"
