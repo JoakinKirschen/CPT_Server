@@ -190,10 +190,66 @@ cp public/index.php public/.htaccess ~/domains/nightdust.eu/public_html/cpt-api/
 php tests/run.php        # optional, against the test database
 ```
 
+## Without SSH (File Manager and cron only)
+
+Some hosts give SSH only with a key, or not at all. Everything above can be
+done with DirectAdmin's **Files** manager and **Cronjobs** page instead. A
+cron job can run any of the `bin/` scripts once.
+
+Some hosts check cron commands and refuse shell symbols such as `;`, `>`,
+`&&` or brackets ("Het ingevoerde commando … is niet juist"). So cron
+commands here are only a PHP path, a script and its arguments. Add
+`--to-file` to any `bin/` script and it appends what it prints to
+`~/cpt-output.txt` (mode 600) instead of mailing it. `bin/setup.php` always
+does this.
+
+1. **Code.** While logged in to GitHub, download the branch or release as a
+   ZIP. In **Files**, go to your home folder (`/`, the one that shows
+   `domains`), upload the ZIP, click **Extract** and delete the ZIP. Rename
+   the extracted folder to `cpt-library`.
+2. **Config.** In `cpt-library/config`, use **Create New File** to make
+   `config.php` with the contents of step 4 above. Then tick it, enter `600`
+   as the permission and click **Set**.
+3. **Web folder.** Create `domains/nightdust.eu/public_html/cpt-api` and
+   upload `index.php` and `.htaccess` into it, taking them from the `public`
+   folder of the ZIP. On Windows, `.htaccess` may be hidden in Explorer.
+4. **Tables and your API key.** Under **Advanced Features → Cronjobs**, add
+   a job with `*` in all five time fields and this command:
+   ```
+   /usr/local/bin/php /home/USER/cpt-library/bin/setup.php joakin
+   ```
+   Wait two minutes, then **delete the cron job**. Open `cpt-output.txt` in
+   your home folder:
+   - It shows the PHP version the cron job used, `Applied: 001_initial`,
+     and your key (`cptlib_…`).
+   - Store the key, then delete the file.
+   - If the file says the PHP is older than 8.1, or no file appears at all,
+     repeat with another PHP path. Try `/opt/alt/php83/usr/bin/php` on
+     CloudLinux servers (the OS line contains `lve`), then
+     `/usr/local/php83/bin/php`.
+   - Running the job more than once is harmless. Later runs append
+     "Database is up to date" and "already exists".
+5. **Check it** from your own computer. Windows 10 and later include
+   `curl.exe`; use it in PowerShell:
+   ```
+   curl.exe -s https://nightdust.eu/cpt-api/ -H "X-Api-Key: cptlib_..."
+   curl.exe -s https://nightdust.eu/cpt-api/cpt/2002-009953 -H "X-Api-Key: cptlib_..."
+   ```
+6. **Nightly jobs.** Add the two cron jobs from step 9, using the PHP path
+   that worked in step 4.
+7. **Later.**
+   - Manage keys with a one-off cron job like
+     `/usr/local/bin/php /home/USER/cpt-library/bin/keys.php rotate joakin --to-file`,
+     then delete the job, read `cpt-output.txt` and delete the file.
+   - To update, upload the new ZIP and replace the folder, but keep
+     `config/config.php`. Then run `bin/migrate.php --to-file` once the same
+     way.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
+| No `cpt-output.txt` after a cron job | Wrong PHP path in the cron command, or the job has not run yet (wait a minute or two). |
 | `server_misconfigured` | Either `config/config.php` is missing or unreadable, the pepper is shorter than 32 characters, or `$root` in `index.php` points to the wrong folder. |
 | `database_unavailable` | Wrong `db.*` settings. The details are in `var/log/errors-*.log`. |
 | `https_required` behind a proxy | Set `api.trust_forwarded_proto` to `true`, but only if the host's proxy sets `X-Forwarded-Proto`. |

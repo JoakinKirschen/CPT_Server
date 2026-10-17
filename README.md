@@ -226,7 +226,7 @@ without changing code.
 ```
 public/            index.php + .htaccess: the only files under public_html
 src/               the application (namespace CptLibrary)
-bin/               migrate, keys, backup (cron), cleanup (cron), reindex
+bin/               setup (no-SSH first run), migrate, keys, backup (cron), cleanup (cron), reindex
 migrations/        SQL schema, applied in order by bin/migrate.php
 config/            config.example.php (the real config.php is not committed)
 tests/             php tests/run.php
