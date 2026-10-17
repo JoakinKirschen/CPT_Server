@@ -164,8 +164,15 @@ line('cURL version', $v['version'] ?? '?');
 line('SSL library', $v['ssl_version'] ?? '?');
 line('HTTP/2 support', defined('CURL_VERSION_HTTP2') && ($v['features'] & CURL_VERSION_HTTP2) ? 'yes' : 'no');
 
-function probeGet(string $url): array
+// The Accept header the library server sends (src/Dov/DovClient.php).
+const SERVER_ACCEPT = 'application/xml, text/xml;q=0.9, */*;q=0.8';
+
+// Tried in turn on DOV's export URL; '' sends no Accept header at all.
+const ACCEPT_VARIANTS = [SERVER_ACCEPT, '*/*', 'application/xml', 'text/xml', 'application/octet-stream', ''];
+
+function probeGet(string $url, string $accept = SERVER_ACCEPT): array
 {
+    $responseHeaders = [];
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -175,12 +182,20 @@ function probeGet(string $url): array
         CURLOPT_TIMEOUT => 30,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
-        CURLOPT_HTTPHEADER => ['Accept: application/xml, text/xml'],
-        CURLOPT_USERAGENT => 'StructuralCanvas-CPT-Library-Probe/1.0',
+        CURLOPT_HTTPHEADER => $accept === '' ? ['Accept:'] : ['Accept: ' . $accept],
+        CURLOPT_USERAGENT => 'StructuralCanvas-CPT-Library-Probe/1.1',
         CURLOPT_ENCODING => '',
+        CURLOPT_HEADERFUNCTION => static function ($handle, string $header) use (&$responseHeaders): int {
+            if (preg_match('/^(content-disposition|content-type|content-encoding):\s*(.*)$/i', trim($header), $match)) {
+                $responseHeaders[strtolower($match[1])] = $match[2];
+            }
+            return strlen($header);
+        },
     ]);
     $body = curl_exec($ch);
     $info = curl_getinfo($ch);
+    $info['accept'] = $accept === '' ? '(none)' : $accept;
+    $info['disposition'] = $responseHeaders['content-disposition'] ?? '';
     $error = curl_error($ch);
     curl_close($ch);
     return [$url, $body === false ? null : $body, $info, $error];
@@ -188,25 +203,35 @@ function probeGet(string $url): array
 
 /*
  * The XML URL, then - like the server - at most one redirect, and only to
- * DOV's export URL for the same id. Prints both hops.
+ * DOV's export URL for the same id. With $tryVariants, the export URL is
+ * asked once per Accept variant; the first 200 answer is returned.
  */
-function probeFetch(string $id): array
+function probeFetch(string $id, bool $tryVariants): array
 {
     $first = probeGet(DOV_HOST . '/data/sondering/' . $id . '.xml');
     [$url, , $info] = $first;
     printHop('First request', $first);
     $export = DOV_HOST . '/xdov/proxy/export/sondering/' . $id;
     $status = (int)($info['http_code'] ?? 0);
-    if ($status >= 300 && $status < 400) {
-        if (($info['redirect_url'] ?? '') !== $export) {
-            echo "Redirect target is not DOV's export URL for this id; not followed.\n";
-            return $first;
-        }
-        $second = probeGet($export);
-        printHop('Second request (redirect followed)', $second);
-        return $second;
+    if ($status < 300 || $status >= 400) {
+        return $first;
     }
-    return $first;
+    if (($info['redirect_url'] ?? '') !== $export) {
+        echo "Redirect target is not DOV's export URL for this id; not followed.\n";
+        return $first;
+    }
+    $best = null;
+    foreach ($tryVariants ? ACCEPT_VARIANTS : [SERVER_ACCEPT] as $accept) {
+        $hop = probeGet($export, $accept);
+        printHop('Export URL, Accept: ' . $hop[2]['accept'], $hop);
+        if ($hop[1] !== null && (int)$hop[2]['http_code'] !== 200 && $hop[1] !== '') {
+            line('Body', mb_substr(trim(preg_replace('/\s+/', ' ', $hop[1])), 0, 120));
+        }
+        if ($best === null && (int)$hop[2]['http_code'] === 200) {
+            $best = $hop;
+        }
+    }
+    return $best ?? $hop;
 }
 
 function printHop(string $title, array $hop): void
@@ -219,10 +244,12 @@ function printHop(string $title, array $hop): void
     line('Content-Type', $info['content_type'] ?? '');
     line('Redirect to', $info['redirect_url'] ?? '');
     line('Bytes', $body === null ? 0 : strlen($body));
+    if (($info['disposition'] ?? '') !== '') line('Content-Disposition', $info['disposition']);
     line('Total time (s)', round((float)($info['total_time'] ?? 0), 3));
 }
 
-[$url, $body, $info, $error] = probeFetch($cptId);
+[$url, $body, $info, $error] = probeFetch($cptId, true);
+echo "\nUsing: Accept: " . ($info['accept'] ?? '?') . ", HTTP " . ($info['http_code'] ?? 0) . "\n";
 line('Primary IP', $info['primary_ip'] ?? '');
 line('SSL verify result', $info['ssl_verify_result'] ?? '');
 if ($body !== null) {
@@ -269,7 +296,7 @@ if ($body !== null) {
 }
 
 echo "\n== Non-existent id " . MISSING_CPT_ID . " ==\n";
-[$url, $body, $info, $error] = probeFetch(MISSING_CPT_ID);
+[$url, $body, $info, $error] = probeFetch(MISSING_CPT_ID, false);
 if ($body !== null && $body !== '') {
     echo "First 300 bytes:\n" . substr($body, 0, 300) . "\n";
 }

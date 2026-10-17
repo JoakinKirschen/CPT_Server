@@ -12,6 +12,12 @@ namespace CptLibrary\Dov;
  */
 final class DovClient
 {
+    // DOV's export URL answers "500 Could not find acceptable representation"
+    // to Accept: application/xml, text/xml (host probe, 2026-10-17); pydov
+    // fetches with any type. XML is preferred, anything is accepted, and the
+    // body must still be well-formed XML.
+    public const ACCEPT = 'Accept: application/xml, text/xml;q=0.9, */*;q=0.8';
+
     public function __construct(
         private Transport $transport,
         private int $connectTimeout = 10,
@@ -31,7 +37,7 @@ final class DovClient
                 // Unreachable while the URL builders are correct; kept as a second lock.
                 throw new \LogicException('Refusing to fetch a non-DOV URL.');
             }
-            $response = $this->transport->get($url, ['Accept: application/xml, text/xml'], $this->connectTimeout, $this->timeout, $this->maxBytes, $this->userAgent);
+            $response = $this->transport->get($url, [self::ACCEPT], $this->connectTimeout, $this->timeout, $this->maxBytes, $this->userAgent);
             $duration += $response->durationMs;
 
             if ($response->truncated) {

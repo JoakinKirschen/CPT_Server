@@ -86,6 +86,19 @@ return [
         same(dov_urls('2002-009953'), $transport->urls);
     },
 
+    'DOV is asked for XML but any content type is accepted' => function (): void {
+        $transport = new FakeTransport(FakeTransport::xml(sample_xml()));
+        (new DovClient($transport))->fetch('2002-009953');
+        same(2, count($transport->headers));
+        foreach ($transport->headers as $headers) {
+            $accept = implode(',', array_filter($headers, static fn(string $h): bool => stripos($h, 'Accept:') === 0));
+            check(str_contains($accept, 'application/xml'), 'XML first');
+            check(str_contains($accept, '*/*'), "DOV's export URL refuses an Accept without */*");
+        }
+        $html = new FakeTransport(new TransportResponse(200, '<html><body>x</body></html>', 'text/html'));
+        same(FetchResult::INVALID, (new DovClient($html))->fetch('2002-009953')->outcome, 'the body must still be XML');
+    },
+
     'every other redirect is refused, not followed' => function (): void {
         $targets = [
             'https://evil.example/xdov/proxy/export/sondering/2002-009953',

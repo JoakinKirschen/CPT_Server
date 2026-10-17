@@ -84,6 +84,8 @@ final class FakeTransport implements Transport
 {
     /** @var list<string> */
     public array $urls = [];
+    /** @var list<list<string>> request headers, per request */
+    public array $headers = [];
     /** @var list<TransportResponse> */
     public array $queue = [];
     public bool $dovRedirect = true;
@@ -105,6 +107,7 @@ final class FakeTransport implements Transport
     public function get(string $url, array $headers, int $connectTimeout, int $timeout, int $maxBytes, string $userAgent): TransportResponse
     {
         $this->urls[] = $url;
+        $this->headers[] = $headers;
         if ($this->dovRedirect && preg_match('#^https://www\.dov\.vlaanderen\.be/data/sondering/(\d{4}-\d{6})\.xml$#', $url, $match)) {
             return new TransportResponse(302, '', 'application/xml', $url, null, false, 0, CptLibrary\Dov\DovId::exportUrl($match[1]));
         }
