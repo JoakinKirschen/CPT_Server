@@ -1,0 +1,7 @@
+# Secrets and runtime data never go in the repository
+config/config.php
+var/
+backups/
+vendor/
+*.log
+.env
