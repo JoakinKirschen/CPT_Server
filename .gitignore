@@ -5,3 +5,4 @@ backups/
 vendor/
 *.log
 .env
+tests/config.test.php
