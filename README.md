@@ -72,6 +72,10 @@ app's `js/project-information.js`, for example `2002-009953`.
 }
 ```
 
+- DOV answers an unknown id with HTTP 200 and an empty `<dov-schema>`.
+  The server turns that into a 404 `not_found` and stores nothing. A CPT
+  whose XML names another id (`dataidentifier/permkey` or `uri`) is refused
+  with `upstream_invalid`.
 - `xml` holds the bytes DOV returned, unchanged. `sha256` is computed over
   exactly those bytes. If the XML is not valid UTF-8, it is sent as base64
   and `xmlEncoding` is `"base64"`.
@@ -85,8 +89,12 @@ app's `js/project-information.js`, for example `2002-009953`.
   - `refresh-skipped`: the copy was checked recently, so DOV was not asked.
   - `stale`: DOV failed or the fetch budget was used up, so the library copy
     was served. `warning` explains which.
-- `position` is read from the XML (`<xy><x/><y/></xy>`, Lambert 72) and
-  converted to WGS 84. It is `null` if the XML has no usable position.
+- `position` comes from the GML points in the XML:
+  - Lambert 72 is read from `ligging/Point/pos`.
+  - Latitude and longitude come from DOV's own WGS 84 point in
+    `alternatieve_crs`.
+  - If one of the two is missing, it is converted from the other.
+  - `position` is `null` if the XML has no usable position.
 
 ### `POST /cpt`
 

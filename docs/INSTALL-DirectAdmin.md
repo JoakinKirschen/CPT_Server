@@ -148,8 +148,9 @@ curl -s https://nightdust.eu/cpt-api/                                   # 401 wi
 The first CPT request should answer `"cache":"miss"` and the second
 `"cache":"hit"`. Then run `php bin/reindex.php`. It reports how many stored
 CPTs have no position. If that count is not 0, the coordinates in the DOV
-XML sit somewhere other than expected; send one XML so `src/Dov/CptXml.php`
-can be adjusted.
+XML sit somewhere other than expected (the server reads the GML
+`ligging/Point/pos`). Send one XML so `src/Dov/CptXml.php` can be adjusted,
+then run `php bin/reindex.php` again.
 
 ## 9. Cron jobs
 

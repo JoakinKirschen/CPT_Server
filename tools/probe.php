@@ -286,6 +286,15 @@ if ($body !== null) {
             }
         }
         $xpath = new DOMXPath($dom);
+        echo "\nGML points:\n";
+        foreach ($xpath->query("//*[local-name()='Point']") ?: [] as $point) {
+            $pos = $xpath->query("*[local-name()='pos']", $point)->item(0);
+            $srs = $point->getAttribute('srsName') ?: ($pos instanceof DOMElement ? $pos->getAttribute('srsName') : '');
+            printf("  %-12s srsName=%s  pos=%s\n", $point->parentNode->localName, $srs ?: '(none)', $pos ? trim($pos->textContent) : '(none)');
+        }
+        foreach ($xpath->query("//*[local-name()='dataidentifier']/*") ?: [] as $node) {
+            line('dataidentifier/' . $node->localName, trim($node->textContent));
+        }
         foreach (['x', 'y', 'xy', 'start_sondering_mtaw', 'diepte_sondering_tot', 'datum_aanvang', 'sondeernummer', 'lengte', 'diepte', 'qc'] as $name) {
             $nodes = $xpath->query("//*[local-name()='{$name}' and not(*)]");
             if ($nodes && $nodes->length) {
@@ -298,7 +307,7 @@ if ($body !== null) {
 echo "\n== Non-existent id " . MISSING_CPT_ID . " ==\n";
 [$url, $body, $info, $error] = probeFetch(MISSING_CPT_ID, false);
 if ($body !== null && $body !== '') {
-    echo "First 300 bytes:\n" . substr($body, 0, 300) . "\n";
+    echo "Body (first 600 bytes):\n" . substr($body, 0, 600) . "\n";
 }
 
 echo "\nDone. Delete this file now.\n";

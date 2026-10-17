@@ -1,21 +1,29 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- Synthetic test file shaped like a DOV CPT (sondering) XML; not real DOV data. -->
-<ns2:dov-schema xmlns:ns2="http://kern.schemas.dov.vlaanderen.be">
-  <sondering>
-    <id>test-only</id>
-    <sondeernummer>GEO-00/000-S1</sondeernummer>
-    <xy>
-      <x>{X}</x>
-      <y>{Y}</y>
-      <betrouwbaarheid>goed</betrouwbaarheid>
-    </xy>
-    <start_sondering_mtaw>12.30</start_sondering_mtaw>
-    <sondeonderzoek>
-      <penetratietest>
-        <meetdata><lengte>0.20</lengte><diepte>0.20</diepte><qc>{QC}</qc><fs>12.0</fs><u>1.0</u></meetdata>
-        <meetdata><lengte>0.40</lengte><diepte>0.40</diepte><qc>2.10</qc><fs>18.5</fs><u>2.0</u></meetdata>
-        <meetdata><lengte>0.60</lengte><diepte>0.60</diepte><qc>3.40</qc><fs>25.1</fs><u>2.5</u></meetdata>
-      </penetratietest>
-    </sondeonderzoek>
-  </sondering>
-</ns2:dov-schema>
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Synthetic test file shaped like DOV's CPT export (host probe, 2026-10-17); not real DOV data. -->
+<ns4:dov-schema xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ns4="http://kern.schemas.dov.vlaanderen.be" xsi:schemaLocation="http://kern.schemas.dov.vlaanderen.be https://www.dov.vlaanderen.be/xdov/schema/latest/xsd/kern/dov.xsd">
+    <sondering>
+        <sondeernummer>GEO-00/000-S1</sondeernummer>
+        <dataidentifier>
+            <permkey>{ID}</permkey>
+            <uri>https://www.dov.vlaanderen.be/data/sondering/{ID}</uri>
+        </dataidentifier>
+        <datum_aanvang>2002-04-30</datum_aanvang>
+        <uitvoerder><naam>Test contractor</naam></uitvoerder>
+        <ligging>
+            <gml:Point srsName="urn:ogc:def:crs:EPSG::31370"><gml:pos>{X} {Y}</gml:pos></gml:Point>
+            <metadata_locatiebepaling><methode>test</methode><betrouwbaarheid>onbekend</betrouwbaarheid></metadata_locatiebepaling>
+            <alternatieve_crs>
+                <gml:Point srsName="urn:ogc:def:crs:EPSG::3812"><gml:pos>{X8} {Y8}</gml:pos></gml:Point>
+                <gml:Point srsName="urn:ogc:def:crs:EPSG::4326"><gml:pos>{LAT} {LON}</gml:pos></gml:Point>
+            </alternatieve_crs>
+        </ligging>
+        <gemeente>Test</gemeente>
+        <sondeonderzoek>
+            <penetratietest>
+                <meetdata><lengte>0.80</lengte><qc>{QC}</qc><Qt>1.2</Qt></meetdata>
+                <meetdata><lengte>1.00</lengte><qc>2.10</qc><Qt>1.9</Qt></meetdata>
+                <meetdata><lengte>1.20</lengte><qc>3.40</qc><Qt>2.5</Qt></meetdata>
+            </penetratietest>
+        </sondeonderzoek>
+    </sondering>
+</ns4:dov-schema>

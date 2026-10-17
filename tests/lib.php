@@ -90,8 +90,18 @@ final class FakeTransport implements Transport
     public array $queue = [];
     public bool $dovRedirect = true;
 
-    public function __construct(public ?TransportResponse $default = null)
+    /** @param TransportResponse|Closure(string): TransportResponse|null $default */
+    public function __construct(public TransportResponse|Closure|null $default = null)
     {
+    }
+
+    /** A default that answers each export URL with a CPT of that id. */
+    public static function cpts(): Closure
+    {
+        return static function (string $url): TransportResponse {
+            preg_match('#(\d{4}-\d{6})$#', $url, $match);
+            return self::xml(sample_xml(0, 152000.0, 212000.0, $match[1] ?? '0000-000000'));
+        };
     }
 
     public static function xml(string $body): TransportResponse
@@ -112,6 +122,9 @@ final class FakeTransport implements Transport
             return new TransportResponse(302, '', 'application/xml', $url, null, false, 0, CptLibrary\Dov\DovId::exportUrl($match[1]));
         }
         $response = array_shift($this->queue) ?? $this->default ?? new TransportResponse(0, '', '', '', 'no response queued');
+        if ($response instanceof Closure) {
+            $response = $response($url);
+        }
         if ($response->effectiveUrl === '' && $response->error === null) {
             return new TransportResponse($response->status, $response->body, $response->contentType, $url, null, $response->truncated, $response->durationMs, $response->redirectUrl);
         }
@@ -136,11 +149,28 @@ function fixture(string $name): string
     return (string)file_get_contents(__DIR__ . '/fixtures/' . $name);
 }
 
-/** A DOV-style CPT XML; $variant changes a measurement so the hash differs. */
-function sample_xml(int $variant = 0, float $x = 152000.0, float $y = 212000.0): string
+/**
+ * A CPT XML shaped like DOV's export; $variant changes a measurement so the
+ * hash differs. The WGS 84 point is DOV-style (latitude first) unless
+ * $withWgs84 is false; the Lambert 2008 point is a dummy the server ignores.
+ */
+function sample_xml(int $variant = 0, float $x = 152000.0, float $y = 212000.0, string $id = '2002-009953', bool $withWgs84 = true): string
 {
-    $qc = number_format(1.25 + $variant / 100, 3, '.', '');
-    return strtr(fixture('sondering-sample.xml'), ['{X}' => (string)$x, '{Y}' => (string)$y, '{QC}' => $qc]);
+    [$lat, $lon] = CptLibrary\Geo\Lambert72::toWgs84($x, $y);
+    $xml = strtr(fixture('sondering-sample.xml'), [
+        '{ID}' => $id,
+        '{X}' => (string)$x,
+        '{Y}' => (string)$y,
+        '{X8}' => (string)($x + 500000),
+        '{Y8}' => (string)($y + 500000),
+        '{LAT}' => (string)$lat,
+        '{LON}' => (string)$lon,
+        '{QC}' => number_format(1.25 + $variant / 100, 3, '.', ''),
+    ]);
+    if (!$withWgs84) {
+        $xml = (string)preg_replace('#<gml:Point srsName="urn:ogc:def:crs:EPSG::4326">.*?</gml:Point>#', '', $xml);
+    }
+    return $xml;
 }
 
 function test_pepper(): string

@@ -64,8 +64,10 @@ final class DovClient
         if ($response->status !== 200) {
             return new FetchResult(FetchResult::UPSTREAM_ERROR, $response->status, '', $duration);
         }
-        if (!CptXml::isCptXml($response->body)) {
-            return new FetchResult(FetchResult::INVALID, $response->status, '', $duration);
+        // DOV answers an unknown id with 200 and an empty <dov-schema>.
+        $outcome = CptXml::classify($response->body, $dovId);
+        if ($outcome !== FetchResult::OK) {
+            return new FetchResult($outcome, $response->status, '', $duration);
         }
         return new FetchResult(FetchResult::OK, 200, $response->body, $duration);
     }

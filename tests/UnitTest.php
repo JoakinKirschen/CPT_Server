@@ -4,6 +4,7 @@
 declare(strict_types=1);
 
 use CptLibrary\Dov\CptXml;
+use CptLibrary\Dov\FetchResult;
 use CptLibrary\Geo\Distance;
 use CptLibrary\Geo\Lambert72;
 use CptLibrary\Http\Cors;
@@ -68,6 +69,60 @@ return [
         near_equal($lon, $position['longitude'], 1e-6);
         same('GEO-00/000-S1', CptXml::name($document));
         same(null, CptXml::position(CptXml::load(sample_xml(0, 9e6, 9e6))), 'coordinates outside Belgium are ignored');
+    },
+
+    'DOV answers are told apart: CPT, unknown id, other id, junk' => function (): void {
+        same(FetchResult::OK, CptXml::classify(sample_xml(), '2002-009953'));
+        same(FetchResult::NOT_FOUND, CptXml::classify(fixture('sondering-empty.xml'), '2002-009953'), 'empty dov-schema');
+        same(FetchResult::INVALID, CptXml::classify(sample_xml(0, 152000.0, 212000.0, '1999-000111'), '2002-009953'), 'another id');
+        same(FetchResult::INVALID, CptXml::classify('<html><body>x</body></html>', '2002-009953'));
+        same(FetchResult::INVALID, CptXml::classify('[x] : Could not find acceptable representation', '2002-009953'));
+        $noIds = (string)preg_replace('#<dataidentifier>.*?</dataidentifier>#s', '', sample_xml());
+        same(FetchResult::OK, CptXml::classify($noIds, '2002-009953'), 'no identifiers: nothing to contradict');
+    },
+
+    'the GML position: Lambert 72 from DOV, WGS 84 from DOV' => function (): void {
+        $document = CptXml::load(sample_xml(0, 152000.0, 212000.0));
+        $position = CptXml::position($document);
+        same(152000.0, $position['x']);
+        same(212000.0, $position['y']);
+        [$lat, $lon] = Lambert72::toWgs84(152000.0, 212000.0);
+        near_equal($lat, $position['latitude'], 1e-6);
+        near_equal($lon, $position['longitude'], 1e-6);
+        same('GEO-00/000-S1', CptXml::name($document), 'sondeernummer, not the contractor name');
+    },
+
+    'the GML position works with other spellings and orders' => function (): void {
+        [$lat, $lon] = Lambert72::toWgs84(152000.0, 212000.0);
+        $point = static fn(string $attributes, string $pos): string =>
+            '<r xmlns:gml="http://www.opengis.net/gml/3.2"><sondering><ligging><gml:Point' . $attributes . '><gml:pos>' . $pos . '</gml:pos></gml:Point></ligging></sondering></r>';
+        $cases = [
+            'EPSG:31370' => $point(' srsName="EPSG:31370"', '152000 212000'),
+            'URL srsName' => $point(' srsName="http://www.opengis.net/def/crs/EPSG/0/31370"', '152000.00 212000.00'),
+            'srsName on pos' => '<r xmlns:gml="http://www.opengis.net/gml/3.2"><gml:Point><gml:pos srsName="EPSG:31370">152000 212000</gml:pos></gml:Point></r>',
+            'no srsName, Lambert values' => $point('', '152000 212000'),
+            'with height' => $point(' srsName="EPSG:31370"', '152000 212000 12.3'),
+            'only WGS 84, lat lon' => $point(' srsName="urn:ogc:def:crs:EPSG::4326"', "{$lat} {$lon}"),
+            'only WGS 84, lon lat' => $point(' srsName="urn:ogc:def:crs:OGC:1.3:CRS84"', "{$lon} {$lat}"),
+            'no srsName, degrees' => $point('', "{$lat} {$lon}"),
+            'old <xy> form' => '<r><sondering><xy><x>152000</x><y>212000</y></xy></sondering></r>',
+        ];
+        foreach ($cases as $label => $xml) {
+            $position = CptXml::position(CptXml::load($xml));
+            check($position !== null, "{$label}: position found");
+            near_equal(152000.0, $position['x'], 0.05, "{$label}: x");
+            near_equal(212000.0, $position['y'], 0.05, "{$label}: y");
+            near_equal($lat, $position['latitude'], 1e-6, "{$label}: latitude");
+            near_equal($lon, $position['longitude'], 1e-6, "{$label}: longitude");
+        }
+        foreach ([
+            'Lambert 2008 only' => $point(' srsName="urn:ogc:def:crs:EPSG::3812"', '652000 712000'),
+            'Lambert 72 out of range' => $point(' srsName="EPSG:31370"', '9000000 9000000'),
+            'WGS 84 outside Belgium' => $point(' srsName="EPSG:4326"', '40.0 -3.7'),
+            'not numbers' => $point(' srsName="EPSG:31370"', 'a b'),
+        ] as $label => $xml) {
+            same(null, CptXml::position(CptXml::load($xml)), $label);
+        }
     },
 
     'private CPT input accepts GEF and CSV' => function (): void {

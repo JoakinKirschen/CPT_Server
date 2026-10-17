@@ -231,6 +231,28 @@ return [
         same(2, $t->dov->fetches(), 'asked again after the TTL');
     },
 
+    "DOV's empty answer for an unknown id is a cached 404" => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        $t->dov->default = FakeTransport::xml(fixture('sondering-empty.xml'));
+        $missing = $t->get('/cpt/' . CPT, $key);
+        same(404, $missing->status);
+        same('not_found', $missing->data()['error']);
+        same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM cpt_records')->fetchColumn(), 'nothing stored');
+        same(404, $t->get('/cpt/' . CPT, $key)->status);
+        same(1, $t->dov->fetches(), 'the second request did not reach DOV');
+    },
+
+    'a CPT that names another id is not stored under this one' => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        $t->dov->default = FakeTransport::xml(sample_xml(0, 152000.0, 212000.0, '1999-000111'));
+        $response = $t->get('/cpt/' . CPT, $key);
+        same(502, $response->status);
+        same('upstream_invalid', $response->data()['error']);
+        same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM cpt_records')->fetchColumn());
+    },
+
     'an answer that is not CPT XML is cached too' => function (): void {
         $t = new TestApp();
         $key = $t->keys->create('alice');
@@ -266,7 +288,7 @@ return [
     'DOV fetches have their own budgets' => function (): void {
         $t = new TestApp(['rate_limit' => ['dov_fetches_per_user_per_hour' => 2, 'dov_fetches_global_per_minute' => 100]]);
         $key = $t->keys->create('alice');
-        $t->dov->default = FakeTransport::xml(sample_xml());
+        $t->dov->default = FakeTransport::cpts();
         same(200, $t->get('/cpt/2002-000001', $key)->status);
         same(200, $t->get('/cpt/2002-000002', $key)->status);
         $limited = $t->get('/cpt/2002-000003', $key);
@@ -278,7 +300,7 @@ return [
         $t2 = new TestApp(['rate_limit' => ['dov_fetches_per_user_per_hour' => 100, 'dov_fetches_global_per_minute' => 1]]);
         $a = $t2->keys->create('alice');
         $b = $t2->keys->create('bob');
-        $t2->dov->default = FakeTransport::xml(sample_xml());
+        $t2->dov->default = FakeTransport::cpts();
         same(200, $t2->get('/cpt/2002-000001', $a)->status);
         same(429, $t2->get('/cpt/2002-000002', $b)->status, 'the server-wide DOV budget covers all users');
     },
@@ -325,9 +347,9 @@ return [
         $alice = $t->keys->create('alice');
         $bob = $t->keys->create('bob');
         $t->dov->queue = [
-            FakeTransport::xml(sample_xml(0, 152000, 212000)),
-            FakeTransport::xml(sample_xml(1, 152300, 212000)),
-            FakeTransport::xml(sample_xml(2, 160000, 212000)),
+            FakeTransport::xml(sample_xml(0, 152000, 212000, '2002-000001')),
+            FakeTransport::xml(sample_xml(1, 152300, 212000, '2002-000002')),
+            FakeTransport::xml(sample_xml(2, 160000, 212000, '2002-000003')),
         ];
         foreach (['2002-000001', '2002-000002', '2002-000003'] as $id) {
             same(200, $t->get('/cpt/' . $id, $alice)->status);
