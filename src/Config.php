@@ -45,18 +45,23 @@ final class Config
             // ?refresh=1 asks DOV again only when the stored copy was last
             // checked at least this long ago.
             'refresh_min_age_seconds' => 86400,
-            // A DOV "not found" is remembered this long.
+            // A DOV "not found" (or an answer that is not CPT XML) is
+            // remembered this long, so a bad id cannot hammer DOV.
             'not_found_ttl_seconds' => 3600,
         ],
         'dov' => [
-            'connect_timeout_seconds' => 10,
-            'timeout_seconds' => 30,
+            // Per request; a fetch is two requests (XML URL, then DOV's
+            // redirect to its export URL), inside max_execution_time (30 s).
+            'connect_timeout_seconds' => 5,
+            'timeout_seconds' => 15,
             'max_bytes' => 8 * 1024 * 1024,
             'user_agent' => 'StructuralCanvas-CPT-Library/' . CPT_LIBRARY_VERSION,
             'lock_wait_seconds' => 20,
         ],
         'private' => [
-            'max_bytes' => 5 * 1024 * 1024,
+            // JSON escaping can nearly double the text; keep twice this
+            // below PHP's post_max_size (8M on the host).
+            'max_bytes' => 3 * 1024 * 1024,
         ],
         'near' => [
             'default_radius_m' => 1000,

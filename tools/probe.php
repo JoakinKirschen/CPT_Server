@@ -164,9 +164,8 @@ line('cURL version', $v['version'] ?? '?');
 line('SSL library', $v['ssl_version'] ?? '?');
 line('HTTP/2 support', defined('CURL_VERSION_HTTP2') && ($v['features'] & CURL_VERSION_HTTP2) ? 'yes' : 'no');
 
-function probeFetch(string $id): array
+function probeGet(string $url): array
 {
-    $url = DOV_HOST . '/data/sondering/' . $id . '.xml';
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -187,16 +186,47 @@ function probeFetch(string $id): array
     return [$url, $body === false ? null : $body, $info, $error];
 }
 
+/*
+ * The XML URL, then - like the server - at most one redirect, and only to
+ * DOV's export URL for the same id. Prints both hops.
+ */
+function probeFetch(string $id): array
+{
+    $first = probeGet(DOV_HOST . '/data/sondering/' . $id . '.xml');
+    [$url, , $info] = $first;
+    printHop('First request', $first);
+    $export = DOV_HOST . '/xdov/proxy/export/sondering/' . $id;
+    $status = (int)($info['http_code'] ?? 0);
+    if ($status >= 300 && $status < 400) {
+        if (($info['redirect_url'] ?? '') !== $export) {
+            echo "Redirect target is not DOV's export URL for this id; not followed.\n";
+            return $first;
+        }
+        $second = probeGet($export);
+        printHop('Second request (redirect followed)', $second);
+        return $second;
+    }
+    return $first;
+}
+
+function printHop(string $title, array $hop): void
+{
+    [$url, $body, $info, $error] = $hop;
+    echo "\n{$title}:\n";
+    line('URL', $url);
+    line('cURL error', $error === '' ? 'none' : $error);
+    line('HTTP status', $info['http_code'] ?? 0);
+    line('Content-Type', $info['content_type'] ?? '');
+    line('Redirect to', $info['redirect_url'] ?? '');
+    line('Bytes', $body === null ? 0 : strlen($body));
+    line('Total time (s)', round((float)($info['total_time'] ?? 0), 3));
+}
+
 [$url, $body, $info, $error] = probeFetch($cptId);
-line('URL', $url);
-line('cURL error', $error === '' ? 'none' : $error);
-line('HTTP status', $info['http_code'] ?? 0);
-line('Content-Type', $info['content_type'] ?? '');
-line('Redirect to', $info['redirect_url'] ?? '');
 line('Primary IP', $info['primary_ip'] ?? '');
 line('SSL verify result', $info['ssl_verify_result'] ?? '');
-line('Total time (s)', round((float)($info['total_time'] ?? 0), 3));
 if ($body !== null) {
+    echo "\nResult:\n";
     line('Bytes', strlen($body));
     line('sha256', hash('sha256', $body));
     echo "\nFirst 400 bytes:\n" . substr($body, 0, 400) . "\n";
@@ -229,7 +259,7 @@ if ($body !== null) {
             }
         }
         $xpath = new DOMXPath($dom);
-        foreach (['x', 'y', 'xy', 'start_sondering_mtaw', 'diepte_sondering_tot', 'datum_aanvang', 'sondeernummer'] as $name) {
+        foreach (['x', 'y', 'xy', 'start_sondering_mtaw', 'diepte_sondering_tot', 'datum_aanvang', 'sondeernummer', 'lengte', 'diepte', 'qc'] as $name) {
             $nodes = $xpath->query("//*[local-name()='{$name}' and not(*)]");
             if ($nodes && $nodes->length) {
                 line("first <{$name}>", trim($nodes->item(0)->textContent) . "  ({$nodes->length}x)");
@@ -238,11 +268,10 @@ if ($body !== null) {
     }
 }
 
+echo "\n== Non-existent id " . MISSING_CPT_ID . " ==\n";
 [$url, $body, $info, $error] = probeFetch(MISSING_CPT_ID);
-echo "\nNon-existent id " . MISSING_CPT_ID . ":\n";
-line('HTTP status', $info['http_code'] ?? 0);
-line('Content-Type', $info['content_type'] ?? '');
-line('Redirect to', $info['redirect_url'] ?? '');
-line('Bytes', $body === null ? 0 : strlen($body));
+if ($body !== null && $body !== '') {
+    echo "First 300 bytes:\n" . substr($body, 0, 300) . "\n";
+}
 
 echo "\nDone. Delete this file now.\n";

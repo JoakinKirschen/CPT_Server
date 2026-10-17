@@ -155,12 +155,16 @@ final class CptRepository
         )->execute([$dovId, $userId, Clock::sql($now), $httpStatus, $outcome, $sha256, $bytes, $durationMs]);
     }
 
-    /** True when DOV said "not found" for this id within the last $seconds. */
-    public function recentlyNotFound(string $dovId, DateTimeImmutable $now, int $seconds): bool
+    /**
+     * 'not_found' or 'invalid' when DOV's last answer for this id, within the
+     * last $seconds, was "no such CPT" or not CPT XML; otherwise null.
+     */
+    public function recentMiss(string $dovId, DateTimeImmutable $now, int $seconds): ?string
     {
         $statement = $this->pdo->prepare('SELECT outcome FROM dov_fetches WHERE dov_id = ? AND fetched_at >= ? ORDER BY id DESC LIMIT 1');
         $statement->execute([$dovId, Clock::sql($now->modify("-{$seconds} seconds"))]);
-        return $statement->fetchColumn() === 'not_found';
+        $outcome = $statement->fetchColumn();
+        return in_array($outcome, ['not_found', 'invalid'], true) ? $outcome : null;
     }
 
     /** Re-reads position and name from each current revision (after a parser change). */

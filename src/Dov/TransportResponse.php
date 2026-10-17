@@ -14,6 +14,7 @@ final class TransportResponse
         public readonly ?string $error = null,
         public readonly bool $truncated = false,
         public readonly int $durationMs = 0,
+        public readonly string $redirectUrl = '',
     ) {
     }
 }

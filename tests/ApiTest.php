@@ -113,11 +113,11 @@ return [
         check(str_contains($data['licence']['attribution'], CPT) && str_contains($data['licence']['attribution'], '2026-10-17'));
         same('Modellicentie Gratis Hergebruik v1.0', $data['licence']['name']);
         same(hash('sha256', $xml), $response->header('X-Cpt-Sha256'));
-        same(['https://www.dov.vlaanderen.be/data/sondering/' . CPT . '.xml'], $t->dov->urls);
+        same(dov_urls(CPT), $t->dov->urls, "the XML URL, then DOV's redirect to its export URL");
 
         $again = $t->get('/cpt/' . CPT, $key);
         same('hit', $again->data()['cache']);
-        same(1, count($t->dov->urls), 'served from the library, DOV not asked again');
+        same(1, $t->dov->fetches(), 'served from the library, DOV not asked again');
 
         $raw = $t->get('/cpt/' . CPT, $key, ['format' => 'xml']);
         same($xml, $raw->body);
@@ -133,17 +133,17 @@ return [
             $response = $t->get($path, $key);
             check(in_array($response->status, [400, 404], true), "{$path} refused (got {$response->status})");
         }
-        same(['https://www.dov.vlaanderen.be/data/sondering/' . CPT . '.xml'], $t->dov->urls, 'only the DOV URL of the valid id');
+        same(dov_urls(CPT), $t->dov->urls, 'only the DOV URLs of the valid id');
     },
 
-    'a DOV redirect is not followed and nothing is stored' => function (): void {
+    'a redirect to anywhere else is not followed and nothing is stored' => function (): void {
         $t = new TestApp();
         $key = $t->keys->create('alice');
-        $t->dov->default = new TransportResponse(301, '', 'text/html');
+        $t->dov->default = FakeTransport::redirect('https://evil.example/2002-009953.xml');
         $response = $t->get('/cpt/' . CPT, $key);
         same(502, $response->status);
         same('upstream_redirect', $response->data()['error']);
-        same(1, count($t->dov->urls));
+        same(dov_urls(CPT), $t->dov->urls, 'the export URL redirected elsewhere; that was not requested');
         same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM cpt_records')->fetchColumn());
     },
 
@@ -159,7 +159,7 @@ return [
         $t->clock->advance(3600);
         $skipped = $t->get('/cpt/' . CPT, $key, ['refresh' => '1'])->data();
         same('refresh-skipped', $skipped['cache']);
-        same(1, count($t->dov->urls));
+        same(1, $t->dov->fetches());
 
         // Same XML: nothing new stored, the check is recorded.
         $t->clock->advance(86400);
@@ -225,10 +225,24 @@ return [
         $t->dov->default = new TransportResponse(404, 'nope', 'text/html');
         same(404, $t->get('/cpt/' . CPT, $key)->status);
         same(404, $t->get('/cpt/' . CPT, $key)->status);
-        same(1, count($t->dov->urls), 'the second request did not reach DOV');
+        same(1, $t->dov->fetches(), 'the second request did not reach DOV');
         $t->clock->advance(3601);
         $t->get('/cpt/' . CPT, $key);
-        same(2, count($t->dov->urls), 'asked again after the TTL');
+        same(2, $t->dov->fetches(), 'asked again after the TTL');
+    },
+
+    'an answer that is not CPT XML is cached too' => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        $t->dov->default = new TransportResponse(200, '', 'application/xml');
+        same('upstream_invalid', $t->get('/cpt/' . CPT, $key)->data()['error']);
+        $again = $t->get('/cpt/' . CPT, $key);
+        same(502, $again->status);
+        same('upstream_invalid', $again->data()['error']);
+        same(1, $t->dov->fetches(), 'the second request did not reach DOV');
+        $t->clock->advance(3601);
+        $t->dov->default = FakeTransport::xml(sample_xml());
+        same(200, $t->get('/cpt/' . CPT, $key)->status, 'asked again after the TTL');
     },
 
     // ---- rate limits ----------------------------------------------------
@@ -258,7 +272,7 @@ return [
         $limited = $t->get('/cpt/2002-000003', $key);
         same(429, $limited->status);
         same('dov_rate_limited', $limited->data()['error']);
-        same(2, count($t->dov->urls), 'DOV was not asked a third time');
+        same(2, $t->dov->fetches(), 'DOV was not asked a third time');
         same(200, $t->get('/cpt/2002-000001', $key)->status, 'stored CPTs are still served');
 
         $t2 = new TestApp(['rate_limit' => ['dov_fetches_per_user_per_hour' => 100, 'dov_fetches_global_per_minute' => 1]]);
@@ -327,7 +341,7 @@ return [
         same(1, count($result['private']));
         same(true, $result['private'][0]['private']);
         same(0, count($t->get('/cpt', $bob, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data()['private']), "bob does not see alice's");
-        same(3, count($t->dov->urls), 'near never asks DOV');
+        same(3, $t->dov->fetches(), 'near never asks DOV');
 
         same(400, $t->get('/cpt', $alice, ['near' => 'abc'])->status);
         same(400, $t->get('/cpt', $alice, ['near' => '91,4'])->status);

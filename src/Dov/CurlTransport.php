@@ -40,8 +40,9 @@ final class CurlTransport implements Transport
         $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $contentType = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
         $effectiveUrl = (string)curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+        $redirectUrl = (string)curl_getinfo($ch, CURLINFO_REDIRECT_URL);
         $error = $ok === false && !$truncated ? curl_error($ch) : null;
         curl_close($ch);
-        return new TransportResponse($status, $body, $contentType, $effectiveUrl, $error, $truncated, (int)((hrtime(true) - $started) / 1e6));
+        return new TransportResponse($status, $body, $contentType, $effectiveUrl, $error, $truncated, (int)((hrtime(true) - $started) / 1e6), $redirectUrl);
     }
 }

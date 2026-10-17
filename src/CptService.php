@@ -13,8 +13,8 @@ use PDO;
 
 /**
  * GET /cpt/{dovId}: the library first, DOV only when the CPT is missing or a
- * refresh is due. DOV is protected by the refresh cooldown, the "not found"
- * cache, a per-id lock (one fetch at a time) and two fetch budgets (per
+ * refresh is due. DOV is protected by the refresh cooldown, the short-term
+ * cache of misses ("not found" or not CPT XML), a per-id lock (one fetch at a time) and two fetch budgets (per
  * user per hour, whole server per minute).
  */
 final class CptService
@@ -60,8 +60,8 @@ final class CptService
         if ($record !== null && strtotime($record['last_checked_at'] . ' UTC') > $now->getTimestamp() - $minAge) {
             return $this->result($dovId, self::CACHE_RECENT);
         }
-        if ($record === null && $this->cpts->recentlyNotFound($dovId, $now, $this->config->int('cache.not_found_ttl_seconds'))) {
-            throw new HttpError(404, 'not_found', 'DOV has no CPT with this id (checked recently).');
+        if ($record === null) {
+            $this->throwRecentMiss($dovId, $now);
         }
 
         $lock = 'cptlib:dov:' . $dovId;
@@ -80,8 +80,8 @@ final class CptService
             if ($current !== null && ($record === null || $current['last_checked_at'] !== $record['last_checked_at'])) {
                 return $this->result($dovId, $record === null ? self::CACHE_HIT : self::CACHE_REFRESHED);
             }
-            if ($current === null && $this->cpts->recentlyNotFound($dovId, $this->clock->now(), $this->config->int('cache.not_found_ttl_seconds'))) {
-                throw new HttpError(404, 'not_found', 'DOV has no CPT with this id (checked recently).');
+            if ($current === null) {
+                $this->throwRecentMiss($dovId, $this->clock->now());
             }
 
             $retry = $this->limiter->hit('dov:user:' . $user->id, $this->config->int('rate_limit.dov_fetches_per_user_per_hour'), 3600)
@@ -119,6 +119,18 @@ final class CptService
             };
         } finally {
             $this->pdo->prepare('SELECT RELEASE_LOCK(?)')->execute([$lock]);
+        }
+    }
+
+    /** Answers from the short-term cache of DOV misses, without asking DOV. */
+    private function throwRecentMiss(string $dovId, \DateTimeImmutable $now): void
+    {
+        $miss = $this->cpts->recentMiss($dovId, $now, $this->config->int('cache.not_found_ttl_seconds'));
+        if ($miss === 'not_found') {
+            throw new HttpError(404, 'not_found', 'DOV has no CPT with this id (checked recently).');
+        }
+        if ($miss === 'invalid') {
+            throw new HttpError(502, 'upstream_invalid', 'DOV did not return CPT XML for this id (checked recently).');
         }
     }
 

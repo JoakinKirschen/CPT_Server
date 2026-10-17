@@ -102,7 +102,8 @@ Content-Type: application/json
 - `format` is `gef` or `csv`. If you leave it out, the server detects it.
   GEF needs `#GEFID` and `#EOH`; CSV needs at least two rows of numbers.
 - `latitude` and `longitude` are optional, but give both or neither.
-- The limit is 5 MB. A body that carries `dovId`, `url` or `sourceUrl` is
+- The limit is 3 MB of text (kept under PHP's `post_max_size` of 8 MB,
+  because JSON escaping can nearly double the size). A body that carries `dovId`, `url` or `sourceUrl` is
   refused.
 - The answer is `201` with `{"kind": "private", "private": true, "id": "p-…", …}`.
   Uploading the same text again returns the existing record with `200` and
@@ -136,11 +137,16 @@ contains stack traces, SQL or file paths. A 500 response also carries a
 
 - **DOV only.** The server builds the fetch URL itself from a validated id:
   `https://www.dov.vlaanderen.be/data/sondering/<id>.xml`. No endpoint takes
-  a URL from the client. cURL is limited to HTTPS and never follows
-  redirects. A redirect, or a response from another URL, is refused, and the
-  final URL is checked again before the request is sent. Responses are capped
-  at 8 MB and must be well-formed XML. The parser loads no external entities
-  and makes no network access. This is not a proxy.
+  a URL from the client. DOV answers that URL with a 302 to its export URL,
+  `https://www.dov.vlaanderen.be/xdov/proxy/export/sondering/<id>`, for
+  the same id. The server follows that one hop, and only when the
+  `Location` header is exactly that URL, built from the same validated id.
+  cURL itself never follows redirects and is limited to HTTPS. Any other
+  redirect, a second redirect, or a response from another URL is refused.
+  Every URL is checked against these two shapes before it is requested.
+  Responses are capped at 8 MB and must be well-formed XML. The parser
+  loads no external entities and makes no network access. This is not a
+  proxy.
 - **API keys.** Every request needs `X-Api-Key`. Keys are random, with
   238 bits of entropy. The database stores only an HMAC-SHA256 hash of each
   key, made with a secret pepper from the config file. Each user has one key.
@@ -156,7 +162,8 @@ contains stack traces, SQL or file paths. A 500 response also carries a
   On top of that:
   - Stored CPTs are served without asking DOV.
   - A refresh within 24 h of the last check is skipped.
-  - A DOV "not found" is remembered for 1 h.
+  - A DOV "not found", or an answer that is not CPT XML, is remembered
+    for 1 h.
   - Only one fetch per CPT runs at a time (MySQL `GET_LOCK`).
 - **Database.** Every query is a prepared statement, with server-side
   prepares and strict SQL mode.

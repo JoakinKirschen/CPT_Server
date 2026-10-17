@@ -37,8 +37,10 @@ return [
         throws(InvalidArgumentException::class, fn() => DovId::xmlUrl("2002-009953\n"));
     },
 
-    'only the exact DOV XML URL is an allowed fetch URL' => function (): void {
+    'only the exact DOV XML and export URLs are allowed fetch URLs' => function (): void {
         check(DovId::isAllowedFetchUrl('https://www.dov.vlaanderen.be/data/sondering/2002-009953.xml'));
+        check(DovId::isAllowedFetchUrl('https://www.dov.vlaanderen.be/xdov/proxy/export/sondering/2002-009953'));
+        same('https://www.dov.vlaanderen.be/xdov/proxy/export/sondering/2002-009953', DovId::exportUrl('2002-009953'));
         foreach ([
             'http://www.dov.vlaanderen.be/data/sondering/2002-009953.xml',
             'https://dov.vlaanderen.be/data/sondering/2002-009953.xml',
@@ -53,6 +55,13 @@ return [
             'https://www.dov.vlaanderen.be/data/sondering/2002-009953',
             'https://www.dov.vlaanderen.be/data/sondering/abc.xml',
             'file:///etc/passwd',
+            'http://www.dov.vlaanderen.be/xdov/proxy/export/sondering/2002-009953',
+            'https://evil.example/xdov/proxy/export/sondering/2002-009953',
+            'https://www.dov.vlaanderen.be/xdov/proxy/export/sondering/2002-009953/',
+            'https://www.dov.vlaanderen.be/xdov/proxy/export/sondering/2002-009953?x=1',
+            'https://www.dov.vlaanderen.be/xdov/proxy/export/sondering/2002-009953.xml',
+            'https://www.dov.vlaanderen.be/xdov/proxy/export/boring/2002-009953',
+            'https://www.dov.vlaanderen.be/xdov/proxy/export/sondering/2002-9953',
         ] as $url) {
             check(!DovId::isAllowedFetchUrl($url), "{$url} must not be allowed");
         }
@@ -62,16 +71,45 @@ return [
         $transport = new FakeTransport(FakeTransport::xml(sample_xml()));
         $result = (new DovClient($transport))->fetch('2002-009953');
         check($result->ok());
-        same(['https://www.dov.vlaanderen.be/data/sondering/2002-009953.xml'], $transport->urls);
+        same(dov_urls('2002-009953'), $transport->urls);
         throws(InvalidArgumentException::class, fn() => (new DovClient($transport))->fetch('https://evil.example/'));
-        same(1, count($transport->urls), 'an invalid id never reaches the transport');
+        same(2, count($transport->urls), 'an invalid id never reaches the transport');
     },
 
-    'redirects are not followed' => function (): void {
-        $transport = new FakeTransport(new TransportResponse(302, '', 'text/html'));
+    "DOV's redirect to its export URL is followed once" => function (): void {
+        $transport = new FakeTransport();
+        $transport->dovRedirect = false;
+        $transport->queue = [FakeTransport::redirect(DovId::exportUrl('2002-009953')), FakeTransport::xml(sample_xml())];
         $result = (new DovClient($transport))->fetch('2002-009953');
-        same(FetchResult::REDIRECTED, $result->outcome);
-        same(1, count($transport->urls), 'one request, no second hop');
+        check($result->ok(), $result->outcome);
+        same(sample_xml(), $result->body);
+        same(dov_urls('2002-009953'), $transport->urls);
+    },
+
+    'every other redirect is refused, not followed' => function (): void {
+        $targets = [
+            'https://evil.example/xdov/proxy/export/sondering/2002-009953',
+            'http://www.dov.vlaanderen.be/xdov/proxy/export/sondering/2002-009953',
+            'https://www.dov.vlaanderen.be.evil.example/xdov/proxy/export/sondering/2002-009953',
+            'https://www.dov.vlaanderen.be/xdov/proxy/export/sondering/2002-000001',
+            'https://www.dov.vlaanderen.be/xdov/proxy/export/sondering/2002-009953?next=https://evil.example',
+            'https://www.dov.vlaanderen.be/data/boring/2002-009953.xml',
+            'https://www.dov.vlaanderen.be/login',
+            '',
+        ];
+        foreach ($targets as $target) {
+            $transport = new FakeTransport();
+            $transport->dovRedirect = false;
+            $transport->queue = [FakeTransport::redirect($target), FakeTransport::xml(sample_xml())];
+            same(FetchResult::REDIRECTED, (new DovClient($transport))->fetch('2002-009953')->outcome, "redirect to '{$target}'");
+            same(['https://www.dov.vlaanderen.be/data/sondering/2002-009953.xml'], $transport->urls, "'{$target}' was not requested");
+        }
+    },
+
+    'a second redirect is refused' => function (): void {
+        $transport = new FakeTransport(FakeTransport::redirect(DovId::exportUrl('2002-009953')));
+        same(FetchResult::REDIRECTED, (new DovClient($transport))->fetch('2002-009953')->outcome);
+        same(dov_urls('2002-009953'), $transport->urls, 'two requests, no third');
 
         $moved = new FakeTransport(new TransportResponse(200, sample_xml(), 'application/xml', 'https://evil.example/x.xml'));
         same(FetchResult::REDIRECTED, (new DovClient($moved))->fetch('2002-009953')->outcome, 'a response from another URL is refused');

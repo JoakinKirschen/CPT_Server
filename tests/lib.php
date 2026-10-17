@@ -75,13 +75,18 @@ final class FixedClock extends Clock
     }
 }
 
-/** Answers from a queue (or one fixed response) and records every URL. */
+/**
+ * Answers from a queue (or one fixed response) and records every URL. Like
+ * DOV, it answers the XML URL with a 302 to the export URL of the same id
+ * (turn off with $dovRedirect = false); the queue answers the rest.
+ */
 final class FakeTransport implements Transport
 {
     /** @var list<string> */
     public array $urls = [];
     /** @var list<TransportResponse> */
     public array $queue = [];
+    public bool $dovRedirect = true;
 
     public function __construct(public ?TransportResponse $default = null)
     {
@@ -92,15 +97,35 @@ final class FakeTransport implements Transport
         return new TransportResponse(200, $body, 'application/xml');
     }
 
+    public static function redirect(string $location, int $status = 302): TransportResponse
+    {
+        return new TransportResponse($status, '', 'application/xml', '', null, false, 0, $location);
+    }
+
     public function get(string $url, array $headers, int $connectTimeout, int $timeout, int $maxBytes, string $userAgent): TransportResponse
     {
         $this->urls[] = $url;
+        if ($this->dovRedirect && preg_match('#^https://www\.dov\.vlaanderen\.be/data/sondering/(\d{4}-\d{6})\.xml$#', $url, $match)) {
+            return new TransportResponse(302, '', 'application/xml', $url, null, false, 0, CptLibrary\Dov\DovId::exportUrl($match[1]));
+        }
         $response = array_shift($this->queue) ?? $this->default ?? new TransportResponse(0, '', '', '', 'no response queued');
         if ($response->effectiveUrl === '' && $response->error === null) {
-            return new TransportResponse($response->status, $response->body, $response->contentType, $url, null, $response->truncated);
+            return new TransportResponse($response->status, $response->body, $response->contentType, $url, null, $response->truncated, $response->durationMs, $response->redirectUrl);
         }
         return $response;
     }
+
+    /** CPT fetches that reached DOV (requests to the XML URL). */
+    public function fetches(): int
+    {
+        return count(array_filter($this->urls, static fn(string $url): bool => str_contains($url, '/data/sondering/')));
+    }
+}
+
+/** The two URLs one fetch of $id requests: DOV's XML URL, then its export URL. */
+function dov_urls(string $id): array
+{
+    return [CptLibrary\Dov\DovId::xmlUrl($id), CptLibrary\Dov\DovId::exportUrl($id)];
 }
 
 function fixture(string $name): string

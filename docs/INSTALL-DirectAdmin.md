@@ -198,4 +198,4 @@ php tests/run.php        # optional, against the test database
 | `https_required` behind a proxy | Set `api.trust_forwarded_proto` to `true`, but only if the host's proxy sets `X-Forwarded-Proto`. |
 | Every path gives 404 from the web server | `mod_rewrite` or `.htaccess` is not active for the folder. |
 | `upstream_unavailable` for every CPT | Outbound HTTPS to DOV is blocked or DOV is down. Check the probe output. |
-| `upstream_redirect` | DOV changed its URLs. The server deliberately does not follow redirects. |
+| `upstream_redirect` | DOV redirected somewhere other than its export URL for the same id (`/xdov/proxy/export/sondering/<id>`), so it has changed its URLs. The server deliberately follows only that one redirect. Run the probe again and send the output. |

@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace CptLibrary\Dov;
 
 /**
- * DOV CPT (sondering) identifiers and the only URLs this server fetches.
+ * DOV CPT (sondering) identifiers and the only URLs this server fetches:
+ * the documented XML URL, and the export URL DOV redirects it to (same
+ * host, same id; seen in the host probe of 2026-10-17).
  *
  * The pattern is DOV_IDENTIFIER_ONLY from Structural Canvas
  * (js/project-information.js): four digits, a hyphen, six digits. \z (not $)
@@ -43,7 +45,13 @@ final class DovId
         return self::recordUrl($id) . '.xml';
     }
 
-    /** True only for exactly the XML URL of a valid id. */
+    /** Where DOV redirects the XML URL to: the only redirect the client follows. */
+    public static function exportUrl(string $id): string
+    {
+        return self::ORIGIN . '/xdov/proxy/export/sondering/' . self::assertValid($id);
+    }
+
+    /** True only for exactly the XML URL or the export URL of a valid id. */
     public static function isAllowedFetchUrl(string $url): bool
     {
         $parts = parse_url($url);
@@ -51,9 +59,12 @@ final class DovId
             || isset($parts['port']) || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) {
             return false;
         }
-        if (!preg_match('#^/data/sondering/(\d{4}-\d{6})\.xml\z#', $parts['path'] ?? '', $match)) {
-            return false;
+        if (preg_match('#^/data/sondering/(\d{4}-\d{6})\.xml\z#', $parts['path'] ?? '', $match)) {
+            return $url === self::xmlUrl($match[1]);
         }
-        return $url === self::xmlUrl($match[1]);
+        if (preg_match('#^/xdov/proxy/export/sondering/(\d{4}-\d{6})\z#', $parts['path'] ?? '', $match)) {
+            return $url === self::exportUrl($match[1]);
+        }
+        return false;
     }
 }
