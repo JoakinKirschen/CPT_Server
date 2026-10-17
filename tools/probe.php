@@ -17,7 +17,7 @@
 
 declare(strict_types=1);
 
-const PROBE_TOKEN = '';            // required for web runs, e.g. a long random string
+const PROBE_TOKEN = 'ky2gv913xnflluqxmpstdi0e5h1zvsir';            // required for web runs, e.g. a long random string
 const DB_HOST = 'localhost';
 const DB_NAME = '';                // leave empty to skip the database check
 const DB_USER = '';
