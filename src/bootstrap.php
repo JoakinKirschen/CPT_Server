@@ -6,7 +6,7 @@
 
 declare(strict_types=1);
 
-const CPT_LIBRARY_VERSION = '1.1.0';
+const CPT_LIBRARY_VERSION = '1.2.0';
 
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');

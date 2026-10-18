@@ -8,17 +8,37 @@ use CptLibrary\Http\HttpError;
 
 /**
  * Checks the body of POST /cpt: {"name", "format": "gef"|"csv", "content",
- * optional "latitude"/"longitude"}. The text is stored as sent; this only
- * makes sure it is plausible CPT text and not something else.
+ * optional "latitude"/"longitude", and since 1.2.0 "visibility"
+ * ("private" | "group" | "library", default private), "location"
+ * {"method", "accuracyM", "text"} and "testDate" (YYYY-MM-DD)}. The text
+ * is stored as sent; this makes sure it is plausible CPT text and not
+ * something else (CptReadings then checks its readings). A group or library
+ * upload needs a position with its method.
  */
 final class PrivateCptInput
 {
+    public const VISIBILITIES = ['private', 'group', 'library'];
+    /** How a position was obtained, and the accuracy assumed when none is given (m). */
+    public const LOCATION_METHODS = [
+        'survey' => 5,        // measured coordinates (GEF header, survey)
+        'map' => 50,          // a pin placed on a map
+        'address' => 25,      // street and house number, geocoded
+        'street' => 250,      // street only
+        'municipality' => 2000,
+    ];
+    private const MAX_ACCURACY_M = 20000;
+
     public function __construct(
         public readonly string $name,
         public readonly string $format,
         public readonly string $content,
         public readonly ?float $latitude,
         public readonly ?float $longitude,
+        public readonly string $visibility = 'private',
+        public readonly ?string $locationMethod = null,
+        public readonly ?int $locationAccuracy = null,
+        public readonly ?string $locationText = null,
+        public readonly ?string $testDate = null,
     ) {
     }
 
@@ -74,7 +94,53 @@ final class PrivateCptInput
         if (($latitude === null) !== ($longitude === null)) {
             throw self::invalid('Give both "latitude" and "longitude", or neither.');
         }
-        return new self($name, $format, $content, $latitude, $longitude);
+
+        $visibility = $data['visibility'] ?? 'private';
+        if (!in_array($visibility, self::VISIBILITIES, true)) {
+            throw self::invalid('"visibility" must be "private", "group" or "library".');
+        }
+        $location = $data['location'] ?? null;
+        if ($location !== null && (!is_array($location) || array_is_list($location))) {
+            throw self::invalid('"location" must be an object: {"method", "accuracyM", "text"}.');
+        }
+        $method = $location['method'] ?? null;
+        if ($method !== null && !array_key_exists($method, self::LOCATION_METHODS)) {
+            throw self::invalid('"location.method" must be one of: ' . implode(', ', array_keys(self::LOCATION_METHODS)) . '.');
+        }
+        $accuracy = $location['accuracyM'] ?? null;
+        if ($accuracy !== null) {
+            if ((!is_int($accuracy) && !is_float($accuracy)) || !is_finite((float)$accuracy) || $accuracy < 1 || $accuracy > self::MAX_ACCURACY_M) {
+                throw self::invalid('"location.accuracyM" must be a number of metres from 1 to ' . self::MAX_ACCURACY_M . '.');
+            }
+            $accuracy = (int)round((float)$accuracy);
+        }
+        if ($method !== null && $accuracy === null) {
+            $accuracy = self::LOCATION_METHODS[$method];
+        }
+        $text = $location['text'] ?? null;
+        if ($text !== null) {
+            if (!is_string($text)) {
+                throw self::invalid('"location.text" must be text.');
+            }
+            $text = trim(preg_replace('/[\x00-\x1F\x7F]+/', ' ', $text) ?? '');
+            $text = $text === '' ? null : mb_substr($text, 0, 200);
+        }
+        if ($latitude === null && ($method !== null || $accuracy !== null)) {
+            throw self::invalid('A location method needs "latitude" and "longitude".');
+        }
+        if ($visibility !== 'private' && ($latitude === null || $method === null)) {
+            throw self::invalid('A group or library upload needs a position ("latitude", "longitude") and "location.method": how it was obtained (survey, map, address, street or municipality).');
+        }
+
+        $testDate = $data['testDate'] ?? null;
+        if ($testDate !== null) {
+            $parsed = is_string($testDate) && preg_match('/^\d{4}-\d{2}-\d{2}\z/', $testDate) === 1
+                ? \DateTimeImmutable::createFromFormat('!Y-m-d', $testDate, new \DateTimeZone('UTC')) : false;
+            if ($parsed === false || $parsed->format('Y-m-d') !== $testDate || (int)$parsed->format('Y') < 1900 || $parsed > new \DateTimeImmutable('tomorrow', new \DateTimeZone('UTC'))) {
+                throw self::invalid('"testDate" must be a date YYYY-MM-DD, not in the future.');
+            }
+        }
+        return new self($name, $format, $content, $latitude, $longitude, $visibility, $method, $accuracy, $text, $testDate);
     }
 
     public static function detectFormat(string $content): string

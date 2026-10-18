@@ -33,6 +33,11 @@ final class Config
             // Only when the site sits behind a proxy that sets it.
             'trust_forwarded_proto' => false,
         ],
+        'public' => [
+            // DOV CPTs, boreholes and interpretations without a key (1.2.0):
+            // DOV data is open data. Uploads always need a key.
+            'enabled' => true,
+        ],
         'rate_limit' => [
             'requests_per_minute' => 60,
             'requests_per_day' => 5000,
@@ -40,6 +45,18 @@ final class Config
             'auth_failures_per_ip_per_minute' => 20,
             'dov_fetches_per_user_per_hour' => 60,
             'dov_fetches_global_per_minute' => 20,
+            // Requests without a key, per IP address (1.2.0).
+            'anonymous_requests_per_minute' => 30,
+            'anonymous_requests_per_day' => 1000,
+            // New objects fetched from DOV without a key: per IP address
+            // per hour, and for all of them together per day. Objects
+            // already in the library are served without counting.
+            'dov_fetches_anonymous_per_ip_per_hour' => 10,
+            'dov_fetches_anonymous_per_day' => 300,
+        ],
+        'storage' => [
+            // Above this database size (MB) nothing new is stored; 0 = no limit.
+            'max_database_mb' => 2048,
         ],
         'cache' => [
             // ?refresh=1 asks DOV again only when the stored copy was last

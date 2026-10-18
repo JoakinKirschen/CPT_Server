@@ -4,13 +4,18 @@ declare(strict_types=1);
 
 namespace CptLibrary\Store;
 
+use CptLibrary\Auth\User;
 use CptLibrary\Clock;
+use CptLibrary\CptReadings;
+use CptLibrary\PrivateCptInput;
 use DateTimeImmutable;
 use PDO;
 
 /**
- * A user's own CPTs. Every query is scoped to the owner: another user's
- * private CPT reads as "not found".
+ * Uploaded CPTs (the table keeps its 1.0 name, private_cpts). Each has a
+ * visibility (1.2.0): private (its owner only), group (the owner's group)
+ * or library (every key). Every read is scoped by visible(): an upload the
+ * reader may not see reads as "not found". Only the owner deletes.
  */
 final class PrivateCptRepository
 {
@@ -26,74 +31,101 @@ final class PrivateCptRepository
     }
 
     /**
+     * Stores an upload. An identical text the uploader can already see is
+     * not stored again: that row is returned with created = false.
+     *
      * @return array{0: array<string,mixed>, 1: bool} [row without content, created]
-     *         An identical upload by the same owner returns the existing row.
      */
-    public function create(int $ownerId, string $name, string $format, string $content, ?float $latitude, ?float $longitude, DateTimeImmutable $now): array
+    public function create(User $owner, PrivateCptInput $input, CptReadings $readings, DateTimeImmutable $now): array
     {
-        $sha = hash('sha256', $content);
-        $existing = $this->findBySha($ownerId, $sha);
+        $sha = hash('sha256', $input->content);
+        $existing = $this->findVisibleBySha($owner, $sha);
         if ($existing !== null) {
             return [$existing, false];
         }
-        [$encoding, $stored] = Content::encode($content);
+        [$encoding, $stored] = Content::encode($input->content);
         $publicId = 'p-' . bin2hex(random_bytes(8));
         $insert = $this->pdo->prepare(
-            'INSERT INTO private_cpts (public_id, owner_id, name, format, sha256, byte_length, encoding, content, latitude, longitude, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO private_cpts (public_id, owner_id, name, format, visibility, sha256, byte_length, encoding, content, latitude, longitude,
+                                       location_method, location_accuracy_m, location_text, test_date, row_count, depth_min_m, depth_max_m, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
-        $insert->bindValue(1, $publicId);
-        $insert->bindValue(2, $ownerId, PDO::PARAM_INT);
-        $insert->bindValue(3, $name);
-        $insert->bindValue(4, $format);
-        $insert->bindValue(5, $sha);
-        $insert->bindValue(6, strlen($content), PDO::PARAM_INT);
-        $insert->bindValue(7, $encoding);
-        $insert->bindValue(8, $stored, PDO::PARAM_LOB);
-        $insert->bindValue(9, $latitude);
-        $insert->bindValue(10, $longitude);
-        $insert->bindValue(11, Clock::sql($now));
+        $values = [
+            $publicId, $owner->id, $input->name, $input->format, $input->visibility, $sha, strlen($input->content), $encoding, $stored,
+            $input->latitude, $input->longitude, $input->locationMethod, $input->locationAccuracy, $input->locationText, $input->testDate,
+            $readings->rowCount(), $readings->depthMin(), $readings->depthMax(), Clock::sql($now),
+        ];
+        foreach ($values as $index => $value) {
+            $type = match (true) {
+                $index === 8 => PDO::PARAM_LOB,
+                is_int($value) => PDO::PARAM_INT,
+                $value === null => PDO::PARAM_NULL,
+                default => PDO::PARAM_STR,
+            };
+            $insert->bindValue($index + 1, $value, $type);
+        }
         try {
             $insert->execute();
         } catch (\PDOException $e) {
-            // A parallel identical upload won the race.
-            if ($e->getCode() === '23000' && ($existing = $this->findBySha($ownerId, $sha)) !== null) {
+            // A parallel identical upload by the same owner won the race.
+            if ($e->getCode() === '23000' && ($existing = $this->findVisibleBySha($owner, $sha)) !== null) {
                 return [$existing, false];
             }
             throw $e;
         }
-        return [$this->find($ownerId, $publicId, false), true];
+        return [$this->find($owner, $publicId, false), true];
     }
 
-    public function find(int $ownerId, string $publicId, bool $withContent): ?array
+    /** An upload $reader may see, or null. */
+    public function find(?User $reader, string $publicId, bool $withContent): ?array
     {
-        $statement = $this->pdo->prepare('SELECT * FROM private_cpts WHERE owner_id = ? AND public_id = ?');
-        $statement->execute([$ownerId, $publicId]);
+        if ($reader === null) {
+            return null;
+        }
+        [$where, $parameters] = self::visible($reader);
+        $statement = $this->pdo->prepare(self::SELECT . ' WHERE p.public_id = ? AND ' . $where);
+        $statement->execute(array_merge([$publicId], $parameters));
         $row = $statement->fetch();
         return $row ? self::shape($row, $withContent) : null;
     }
 
-    public function delete(int $ownerId, string $publicId): bool
+    public function delete(User $owner, string $publicId): bool
     {
         $statement = $this->pdo->prepare('DELETE FROM private_cpts WHERE owner_id = ? AND public_id = ?');
-        $statement->execute([$ownerId, $publicId]);
+        $statement->execute([$owner->id, $publicId]);
         return $statement->rowCount() === 1;
     }
 
-    /** @return list<array<string,mixed>> */
-    public function inBox(int $ownerId, float $minLat, float $maxLat, float $minLon, float $maxLon, int $limit): array
+    /** @return list<array<string,mixed>> the uploads $reader may see in the box */
+    public function inBox(?User $reader, float $minLat, float $maxLat, float $minLon, float $maxLon, int $limit): array
     {
+        if ($reader === null) {
+            return [];
+        }
+        [$where, $parameters] = self::visible($reader);
         $statement = $this->pdo->prepare(
-            'SELECT * FROM private_cpts WHERE owner_id = ? AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ? LIMIT ' . max(1, $limit)
+            self::SELECT . ' WHERE p.latitude BETWEEN ? AND ? AND p.longitude BETWEEN ? AND ? AND ' . $where . ' LIMIT ' . max(1, $limit)
         );
-        $statement->execute([$ownerId, $minLat, $maxLat, $minLon, $maxLon]);
+        $statement->execute(array_merge([$minLat, $maxLat, $minLon, $maxLon], $parameters));
         return array_map(static fn(array $row): array => self::shape($row, false), $statement->fetchAll());
     }
 
-    private function findBySha(int $ownerId, string $sha): ?array
+    private const SELECT = 'SELECT p.*, o.name AS owner_name FROM private_cpts p JOIN api_users o ON o.id = p.owner_id';
+
+    /** @return array{0: string, 1: list<mixed>} the visibility condition for $reader */
+    private static function visible(User $reader): array
     {
-        $statement = $this->pdo->prepare('SELECT * FROM private_cpts WHERE owner_id = ? AND sha256 = ?');
-        $statement->execute([$ownerId, $sha]);
+        if ($reader->group === null) {
+            return ["(p.owner_id = ? OR p.visibility = 'library')", [$reader->id]];
+        }
+        return ["(p.owner_id = ? OR p.visibility = 'library' OR (p.visibility = 'group' AND o.group_name = ?))", [$reader->id, $reader->group]];
+    }
+
+    private function findVisibleBySha(User $reader, string $sha): ?array
+    {
+        [$where, $parameters] = self::visible($reader);
+        $statement = $this->pdo->prepare(self::SELECT . ' WHERE p.sha256 = ? AND ' . $where . ' ORDER BY p.owner_id = ? DESC, p.id LIMIT 1');
+        $statement->execute(array_merge([$sha], $parameters, [$reader->id]));
         $row = $statement->fetch();
         return $row ? self::shape($row, false) : null;
     }
