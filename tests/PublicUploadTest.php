@@ -225,6 +225,30 @@ return [
         same(['dov'], array_column($other, 'kind'), 'another test date is another CPT');
     },
 
+    // ---- uploads: origin (1.3.0) ------------------------------------------
+
+    'an upload says where its readings come from' => function (): void {
+        $t = new TestApp();
+        $alice = $t->keys->create('alice');
+        $plain = upload($t, $alice, upload_gef(20, 2.0, 1));
+        same(201, $plain->status, $plain->body);
+        same('file', $plain->data()['origin'], 'a data file by default');
+        $plot = upload($t, $alice, upload_gef(20, 2.0, 2), ['origin' => 'pdf-plot']);
+        same(201, $plot->status, $plot->body);
+        same('pdf-plot', $plot->data()['origin']);
+        same('pdf-plot', $t->get('/cpt/' . $plot->data()['id'], $alice)->data()['origin']);
+        same('pdf-table', upload($t, $alice, upload_gef(20, 2.0, 3), ['origin' => 'pdf-table'])->data()['origin']);
+        same(400, upload($t, $alice, upload_gef(20, 2.0, 4), ['origin' => 'scan'])->status);
+        [$lat, $lon] = point();
+        $where = ['visibility' => 'library', 'latitude' => $lat, 'longitude' => $lon, 'location' => ['method' => 'survey'], 'testDate' => '2025-03-04'];
+        upload($t, $alice, upload_gef(20, 2.0, 5), ['origin' => 'pdf-plot'] + $where);
+        $near = upload($t, $alice, upload_gef(20, 2.0, 6), $where)->data()['possibleDuplicates'];
+        same('pdf-plot', $near[0]['origin'] ?? null, 'a possible duplicate says it was digitised');
+        $origins = array_column($t->get('/cpt', $alice, ['near' => "{$lat},{$lon}", 'radius' => '50'])->data()['uploads'], 'origin');
+        sort($origins);
+        same(['file', 'pdf-plot'], $origins, 'near names the origin');
+    },
+
     // ---- the reader ------------------------------------------------------
 
     'the readings are read from GEF columns and CSV, in MPa' => function (): void {

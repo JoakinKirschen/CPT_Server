@@ -46,18 +46,18 @@ final class PrivateCptRepository
         [$encoding, $stored] = Content::encode($input->content);
         $publicId = 'p-' . bin2hex(random_bytes(8));
         $insert = $this->pdo->prepare(
-            'INSERT INTO private_cpts (public_id, owner_id, name, format, visibility, sha256, byte_length, encoding, content, latitude, longitude,
+            'INSERT INTO private_cpts (public_id, owner_id, name, format, visibility, data_origin, sha256, byte_length, encoding, content, latitude, longitude,
                                        location_method, location_accuracy_m, location_text, test_date, row_count, depth_min_m, depth_max_m, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $values = [
-            $publicId, $owner->id, $input->name, $input->format, $input->visibility, $sha, strlen($input->content), $encoding, $stored,
+            $publicId, $owner->id, $input->name, $input->format, $input->visibility, $input->origin, $sha, strlen($input->content), $encoding, $stored,
             $input->latitude, $input->longitude, $input->locationMethod, $input->locationAccuracy, $input->locationText, $input->testDate,
             $readings->rowCount(), $readings->depthMin(), $readings->depthMax(), Clock::sql($now),
         ];
         foreach ($values as $index => $value) {
             $type = match (true) {
-                $index === 8 => PDO::PARAM_LOB,
+                $index === 9 => PDO::PARAM_LOB,
                 is_int($value) => PDO::PARAM_INT,
                 $value === null => PDO::PARAM_NULL,
                 default => PDO::PARAM_STR,

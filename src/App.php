@@ -489,7 +489,7 @@ final class App
             $sameDepth = $row['depth_max_m'] === null || $other['depth_max_m'] === null || abs((float)$row['depth_max_m'] - (float)$other['depth_max_m']) <= 0.5;
             if ($distance <= $reach && $sameDate && $sameDepth) {
                 $found[] = ['kind' => 'upload', 'id' => $other['public_id'], 'name' => $other['name'], 'distance' => round($distance, 1),
-                    'testDate' => $other['test_date'], 'owner' => $other['owner_name']];
+                    'testDate' => $other['test_date'], 'owner' => $other['owner_name'], 'origin' => $other['data_origin'] ?? 'file'];
             }
         }
         $dovRadius = max(10.0, min($accuracy, 100.0));
@@ -530,6 +530,7 @@ final class App
             'kind' => 'upload',
             'private' => $row['visibility'] === 'private',
             'visibility' => $row['visibility'],
+            'origin' => $row['data_origin'] ?? 'file',
             'id' => $row['public_id'],
             'name' => $row['name'],
             'owner' => $row['owner_name'],

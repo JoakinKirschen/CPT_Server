@@ -161,7 +161,7 @@ Content-Type: application/json
   "visibility": "library",
   "latitude": 51.05, "longitude": 3.72,
   "location": { "method": "street", "text": "Kerkstraat, 9000 Gent" },
-  "testDate": "2025-03-04" }
+  "testDate": "2025-03-04", "origin": "file" }
 ```
 
 - `format` is `gef` or `csv`. If you leave it out, the server detects it.
@@ -188,6 +188,13 @@ Content-Type: application/json
 
   `accuracyM` (1–20 000 m) overrides the default. `text` (at most 200
   characters) keeps the address or place name as given.
+- `origin` (1.3.0) says where the readings come from:
+  - `file` (the default): a data file such as a GEF, a CSV or a
+    spreadsheet;
+  - `pdf-table`: a table of readings in a PDF report;
+  - `pdf-plot`: digitised from a plot in a PDF report. These readings are
+    less exact than the test's own data, and every answer that names the
+    upload says so.
 - `testDate` is the date of the test (`YYYY-MM-DD`). It is optional, but
   the answer warns when it is missing because it helps to find duplicates.
 - The limit is 3 MB of text (kept under PHP's `post_max_size` of 8 MB,
@@ -218,7 +225,7 @@ uploads by hand.
 **Answer.** `201` with a summary:
 
 ```json
-{ "kind": "upload", "private": false, "visibility": "library", "id": "p-…",
+{ "kind": "upload", "private": false, "visibility": "library", "origin": "file", "id": "p-…",
   "name": "Site A – S1", "owner": "joakin", "format": "gef", "sha256": "…", "bytes": 5321,
   "createdAt": "…", "testDate": "2025-03-04", "rowCount": 412, "finalDepth": 20.6,
   "position": { "latitude": 51.05, "longitude": 3.72 },
