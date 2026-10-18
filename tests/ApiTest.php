@@ -13,19 +13,29 @@ const INTERPRETATION = '2016-180001';
 return [
     // ---- authentication -------------------------------------------------
 
-    'requests without a valid key are refused' => function (): void {
+    'a key that is sent must be valid; without one only DOV reads are open' => function (): void {
         $t = new TestApp();
         $key = $t->keys->create('alice');
-        same(401, $t->get('/', null)->status);
-        same('unauthorized', $t->get('/', null)->data()['error']);
         same(401, $t->get('/', 'cptlib_' . str_repeat('A', 40))->status, 'well-formed but unknown');
-        same(401, $t->get('/', 'nonsense')->status);
-        same(401, $t->get('/', null, ['api_key' => $key, 'key' => $key])->status, 'the key in the query string is ignored');
-        same(401, $t->get('/cpt/' . CPT, null)->status);
-        same([], $t->dov->urls, 'DOV is never asked without a key');
+        same(401, $t->get('/', 'nonsense')->status, 'a wrong key is never read as no key');
+        same(401, $t->get('/cpt/' . CPT, 'nonsense')->status);
+        same([], $t->dov->urls, 'DOV is never asked for a wrong key');
+        $anonymous = $t->get('/', null, ['api_key' => $key, 'key' => $key])->data();
+        same(null, $anonymous['user'], 'the key in the query string is ignored');
+        same(true, $anonymous['anonymous']);
+        same(false, $anonymous['canWrite']);
+        same(true, $anonymous['publicReads']);
         $ok = $t->get('/', $key);
         same(200, $ok->status);
         same('alice', $ok->data()['user']);
+        same(false, $ok->data()['anonymous']);
+    },
+
+    'public reads can be switched off' => function (): void {
+        $t = new TestApp(['public' => ['enabled' => false]]);
+        same(401, $t->get('/', null)->status);
+        same(401, $t->get('/cpt/' . CPT, null)->status);
+        same([], $t->dov->urls);
     },
 
     'keys are stored hashed, one per user, revocable and rotatable' => function (): void {
@@ -80,8 +90,8 @@ return [
     'CORS headers never replace authentication' => function (): void {
         $t = new TestApp();
         $key = $t->keys->create('alice');
-        $refused = $t->get('/', null, [], ['Origin' => 'null']);
-        same(401, $refused->status, 'Origin null alone is not enough');
+        $refused = $t->request('POST', '/cpt', [], ['Origin' => 'null', 'Content-Type' => 'application/json'], '{}');
+        same(401, $refused->status, 'Origin null alone is not enough to upload');
         same('null', $refused->header('Access-Control-Allow-Origin'), 'but the app can read the error');
         $foreign = $t->get('/', $key, [], ['Origin' => 'https://evil.example']);
         same(200, $foreign->status, 'a valid key works from any origin (CORS is not auth)');
@@ -314,12 +324,16 @@ return [
         $t = new TestApp();
         $alice = $t->keys->create('alice');
         $bob = $t->keys->create('bob');
-        $gef = "#GEFID= 1, 1, 0\r\n#EOH=\r\n0.2;1.5;!\r\n";
+        $gef = upload_gef();
         $created = $t->postJson('/cpt', $alice, ['name' => 'Site A S1', 'content' => $gef, 'latitude' => 51.0, 'longitude' => 4.0]);
         same(201, $created->status, $created->body);
         $data = $created->data();
-        same('private', $data['kind']);
+        same('upload', $data['kind']);
         same(true, $data['private']);
+        same('private', $data['visibility'], 'private unless asked otherwise');
+        same('alice', $data['owner']);
+        same(20, $data['rowCount']);
+        near_equal(4.0, $data['finalDepth'], 1e-9);
         check(preg_match('/^p-[0-9a-f]{16}$/', $data['id']) === 1);
         check(!array_key_exists('dovId', $data), 'no DOV fields on private CPTs');
 
@@ -345,7 +359,7 @@ return [
         same(403, $t->postJson('/cpt', $key, ['name' => 'x', 'content' => "#GEFID= 1\n#EOH=\n"])->status);
     },
 
-    'near lists library CPTs within the radius, DOV and private apart' => function (): void {
+    'near lists library CPTs within the radius, DOV and uploads apart' => function (): void {
         $t = new TestApp();
         $alice = $t->keys->create('alice');
         $bob = $t->keys->create('bob');
@@ -358,14 +372,16 @@ return [
             same(200, $t->get('/cpt/' . $id, $alice)->status);
         }
         [$lat, $lon] = CptLibrary\Geo\Lambert72::toWgs84(152000, 212000);
-        $t->postJson('/cpt', $alice, ['name' => 'mine', 'content' => "#GEFID= 1\n#EOH=\n", 'latitude' => $lat, 'longitude' => $lon]);
+        $t->postJson('/cpt', $alice, ['name' => 'mine', 'content' => upload_gef(), 'latitude' => $lat, 'longitude' => $lon]);
 
         $result = $t->get('/cpt', $alice, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data();
         same(['2002-000001', '2002-000002'], array_column($result['dov'], 'dovId'), 'sorted by distance, the far one left out');
         check($result['dov'][1]['distance'] > 250 && $result['dov'][1]['distance'] < 350, 'about 300 m');
-        same(1, count($result['private']));
-        same(true, $result['private'][0]['private']);
-        same(0, count($t->get('/cpt', $bob, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data()['private']), "bob does not see alice's");
+        same(1, count($result['uploads']));
+        same(true, $result['uploads'][0]['private']);
+        same(0, count($t->get('/cpt', $bob, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data()['uploads']), "bob does not see alice's");
+        same(0, count($t->get('/cpt', null, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data()['uploads']), 'nor does a request without a key');
+        same(2, count($t->get('/cpt', null, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data()['dov']), 'which does see the DOV CPTs');
         same(3, $t->dov->fetches(), 'near never asks DOV');
 
         same(400, $t->get('/cpt', $alice, ['near' => 'abc'])->status);
@@ -387,7 +403,7 @@ return [
         $key = $t->keys->create('alice');
         $xml = borehole_xml();
         $t->dov->default = FakeTransport::xml($xml);
-        same(401, $t->get('/borehole/' . BOREHOLE, null)->status, 'the same key is needed');
+        same(401, $t->get('/borehole/' . BOREHOLE, 'nonsense')->status, 'a wrong key is refused');
         same([], $t->dov->urls);
         $response = $t->get('/borehole/' . BOREHOLE, $key);
         same(200, $response->status, $response->body);
@@ -536,7 +552,7 @@ return [
         same('borehole', $result['type']);
         same(['2016-000001'], array_column($result['dov'], 'dovId'), 'the far one and the CPT left out');
         same('https://www.dov.vlaanderen.be/data/boring/2016-000001', $result['dov'][0]['recordUrl']);
-        same([], $result['private']);
+        same([], $result['uploads']);
         same(['2002-000001'], array_column($t->get('/cpt', $key, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data()['dov'], 'dovId'), 'and no borehole among the CPTs');
         same(400, $t->get('/borehole', $key, ['near' => 'abc'])->status);
     },

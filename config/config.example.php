@@ -26,6 +26,12 @@ return [
         'require_https' => true,
     ],
 
+    // DOV objects can be read without a key (1.2.0); false asks a key for
+    // every request again. Uploads always need a key.
+    'public' => [
+        'enabled' => true,
+    ],
+
     'rate_limit' => [
         'requests_per_minute' => 60,
         'requests_per_day' => 5000,
@@ -33,6 +39,18 @@ return [
         'auth_failures_per_ip_per_minute' => 20,
         'dov_fetches_per_user_per_hour' => 60,
         'dov_fetches_global_per_minute' => 20,
+        // Without a key: per IP address, and DOV fetches for all keyless
+        // requests together per day.
+        'anonymous_requests_per_minute' => 30,
+        'anonymous_requests_per_day' => 1000,
+        'dov_fetches_anonymous_per_ip_per_hour' => 10,
+        'dov_fetches_anonymous_per_day' => 300,
+    ],
+
+    // Nothing new is fetched or uploaded once the tables reach this size
+    // (MB); stored objects are still served. 0 turns the cap off.
+    'storage' => [
+        'max_database_mb' => 2048,
     ],
 
     'cache' => [

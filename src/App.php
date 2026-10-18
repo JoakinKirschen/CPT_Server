@@ -27,21 +27,29 @@ use PDO;
  *                                 or on ?refresh=1; ?revision=<sha256>; ?format=xml
  *   GET    /cpt/{dovId}/revisions every stored revision of a DOV CPT
  *   GET    /cpt?near=lat,lon&radius=m   library CPTs around a point
- *   POST   /cpt                   store a private CPT (GEF or CSV text)
- *   GET    /cpt/{privateId}       one of your private CPTs
- *   DELETE /cpt/{privateId}       delete one of your private CPTs
+ *   POST   /cpt                   upload a CPT (GEF or CSV text), private,
+ *                                 group or library, after the quality check
+ *   GET    /cpt/{uploadId}        an upload you may see
+ *   DELETE /cpt/{uploadId}        delete one of your uploads
  *   GET    /borehole/{dovId}, /interpretation/{dovId}   a DOV borehole or
  *                                 interpretation, kept like a DOV CPT (same
  *                                 query options, /revisions)
  *   GET    /borehole?near=lat,lon&radius=m   library boreholes around a point
- * Every request but a CORS preflight needs X-Api-Key.
+ * Since 1.2.0 DOV objects and "near" are public: no key needed (limited
+ * per IP address; refresh and revisions need a key). Uploads need
+ * X-Api-Key, as does everything else. A key that is sent but not valid is
+ * refused, never read as "no key".
  */
 final class App
 {
     private Cors $cors;
     private ApiKeys $keys;
     private RateLimiter $limiter;
+    /** The duplicate check looks at least this far around a new upload (m). */
+    private const DUPLICATE_MIN_RADIUS_M = 25;
+
     private PrivateCptRepository $privateCpts;
+    private StorageGuard $storage;
     /** @var array<string, CptRepository> by DovKind value */
     private array $stores = [];
     /** @var array<string, CptService> by DovKind value */
@@ -58,6 +66,7 @@ final class App
         $this->keys = new ApiKeys($pdo, (string)$config->get('api.key_pepper'), $clock);
         $this->limiter = new RateLimiter($pdo, $clock);
         $this->privateCpts = new PrivateCptRepository($pdo);
+        $this->storage = new StorageGuard($pdo, (float)$config->get('storage.max_database_mb'));
         $dov = new DovClient(
             $transport,
             $config->int('dov.connect_timeout_seconds'),
@@ -67,7 +76,7 @@ final class App
         );
         foreach (DovKind::cases() as $kind) {
             $this->stores[$kind->value] = new CptRepository($pdo, $kind);
-            $this->services[$kind->value] = new CptService($pdo, $this->stores[$kind->value], $dov, $this->limiter, $clock, $config);
+            $this->services[$kind->value] = new CptService($pdo, $this->stores[$kind->value], $dov, $this->limiter, $clock, $config, $this->storage);
         }
     }
 
@@ -148,9 +157,14 @@ final class App
         return $response;
     }
 
-    private function authenticate(Request $request): User
+    /** The key's user; null for a request without a key when public reads are on. */
+    private function authenticate(Request $request): ?User
     {
-        $user = $this->keys->authenticate($request->header('x-api-key'));
+        $key = $request->header('x-api-key');
+        if (($key === null || trim($key) === '') && $this->config->get('public.enabled')) {
+            return null;
+        }
+        $user = $this->keys->authenticate($key);
         if ($user !== null) {
             return $user;
         }
@@ -162,13 +176,16 @@ final class App
         throw new HttpError(401, 'unauthorized', 'A valid X-Api-Key header is required.');
     }
 
-    private function limitRequests(User $user, Request $request): void
+    private function limitRequests(?User $user, Request $request): void
     {
-        $limits = [
+        $limits = $user === null ? [
+            ['anon:m:' . $request->clientIp, $this->config->int('rate_limit.anonymous_requests_per_minute'), 60],
+            ['anon:d:' . $request->clientIp, $this->config->int('rate_limit.anonymous_requests_per_day'), 86400],
+        ] : [
             ['req:m:' . $user->id, $this->config->int('rate_limit.requests_per_minute'), 60],
             ['req:d:' . $user->id, $this->config->int('rate_limit.requests_per_day'), 86400],
         ];
-        if ($request->method === 'POST') {
+        if ($request->method === 'POST' && $user !== null) {
             $limits[] = ['post:h:' . $user->id, $this->config->int('rate_limit.posts_per_hour'), 3600];
         }
         foreach ($limits as [$bucket, $limit, $window]) {
@@ -179,7 +196,16 @@ final class App
         }
     }
 
-    private function route(Request $request, User $user): Response
+    /** Uploads and the rest beyond public DOV reads need a key. */
+    private static function requireKey(?User $user, string $what): User
+    {
+        if ($user === null) {
+            throw new HttpError(401, 'unauthorized', "A valid X-Api-Key header is required {$what}.");
+        }
+        return $user;
+    }
+
+    private function route(Request $request, ?User $user): Response
     {
         $path = $request->path;
         if (preg_match('#^[A-Za-z0-9/_.-]*\z#', $path) !== 1) {
@@ -201,7 +227,7 @@ final class App
         }
         if (count($segments) === 1) {
             if ($method === 'POST') {
-                return $this->createPrivate($request, $user);
+                return $this->createPrivate($request, self::requireKey($user, 'to upload CPTs'));
             }
             $this->allow($method, ['GET', 'POST']);
             return $this->near(DovKind::Cpt, $request, $user);
@@ -215,6 +241,7 @@ final class App
         }
         if (count($segments) === 3 && $segments[2] === 'revisions' && $isDov) {
             $this->allow($method, ['GET']);
+            self::requireKey($user, 'to list revisions');
             return $this->revisions(DovKind::Cpt, $id);
         }
         if (count($segments) !== 2) {
@@ -222,17 +249,17 @@ final class App
         }
         if ($isPrivate) {
             if ($method === 'DELETE') {
-                return $this->deletePrivate($id, $user);
+                return $this->deletePrivate($id, self::requireKey($user, 'to delete an upload'));
             }
             $this->allow($method, ['GET', 'DELETE']);
-            return $this->getPrivate($id, $user);
+            return $this->getPrivate($id, self::requireKey($user, 'to read uploaded CPTs'));
         }
         $this->allow($method, ['GET']);
         return $this->getDov(DovKind::Cpt, $id, $request, $user);
     }
 
     /** /borehole and /interpretation: DOV objects only (no private ones). */
-    private function routeDataset(DovKind $kind, array $segments, Request $request, User $user): Response
+    private function routeDataset(DovKind $kind, array $segments, Request $request, ?User $user): Response
     {
         $method = $request->method;
         if (count($segments) === 1) {
@@ -248,6 +275,7 @@ final class App
         }
         if (count($segments) === 3 && $segments[2] === 'revisions') {
             $this->allow($method, ['GET']);
+            self::requireKey($user, 'to list revisions');
             return $this->revisions($kind, $id);
         }
         if (count($segments) !== 2) {
@@ -265,22 +293,25 @@ final class App
         throw new HttpError(405, 'method_not_allowed', 'Method not allowed.', ['Allow' => implode(', ', $methods)]);
     }
 
-    private function status(User $user): Response
+    private function status(?User $user): Response
     {
         return Response::json(200, [
             'service' => 'Structural Canvas CPT library',
             'version' => CPT_LIBRARY_VERSION,
-            'user' => $user->name,
-            'canWrite' => $user->canWrite,
+            'user' => $user?->name,
+            'anonymous' => $user === null,
+            'canWrite' => $user !== null && $user->canWrite,
+            'group' => $user?->group,
+            'publicReads' => (bool)$this->config->get('public.enabled'),
             'datasets' => array_map(static fn(DovKind $kind): string => $kind->value, DovKind::cases()),
             'licence' => $this->licence(null, null),
         ]);
     }
 
-    private function getDov(DovKind $kind, string $dovId, Request $request, User $user): Response
+    private function getDov(DovKind $kind, string $dovId, Request $request, ?User $user): Response
     {
         $refresh = in_array($request->query('refresh'), ['1', 'true'], true);
-        $result = $this->services[$kind->value]->get($dovId, $user, $refresh, $request->query('revision'));
+        $result = $this->services[$kind->value]->get($dovId, $user, $refresh, $request->query('revision'), $request->clientIp);
         $record = $result['record'];
         $revision = $result['revision'];
         $xml = (string)$revision['xml'];
@@ -341,7 +372,7 @@ final class App
         ]);
     }
 
-    private function near(DovKind $kind, Request $request, User $user): Response
+    private function near(DovKind $kind, Request $request, ?User $user): Response
     {
         $near = $request->query('near');
         if ($near === null || preg_match('/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\z/', $near, $match) !== 1) {
@@ -378,8 +409,8 @@ final class App
         };
 
         $dov = $within($this->stores[$kind->value]->inBox($minLat, $maxLat, $minLon, $maxLon, $max * 5));
-        // Private uploads exist for CPTs only.
-        $private = $kind === DovKind::Cpt ? $within($this->privateCpts->inBox($user->id, $minLat, $maxLat, $minLon, $maxLon, $max * 5)) : [];
+        // Uploads exist for CPTs only, and only for a key that may see them.
+        $uploads = $kind === DovKind::Cpt ? $within($this->privateCpts->inBox($user, $minLat, $maxLat, $minLon, $maxLon, $max * 5)) : [];
         return Response::json(200, [
             'type' => $kind->value,
             'near' => ['latitude' => $latitude, 'longitude' => $longitude],
@@ -398,7 +429,7 @@ final class App
                 'lastCheckedAt' => Clock::iso($row['last_checked_at']),
                 'recordUrl' => DovId::recordUrl($row['dov_id'], $kind),
             ], $dov),
-            'private' => array_map(fn(array $row): array => $this->privateSummary($row) + ['distance' => $row['distance']], $private),
+            'uploads' => array_map(fn(array $row): array => $this->uploadSummary($row) + ['distance' => $row['distance']], $uploads),
             'licence' => $this->licence(null, null),
         ]);
     }
@@ -413,17 +444,73 @@ final class App
             throw new HttpError(415, 'unsupported_media_type', 'Send the CPT as application/json.');
         }
         $input = PrivateCptInput::fromJson($request->body(), $this->config->int('private.max_bytes'));
-        [$row, $created] = $this->privateCpts->create($user->id, $input->name, $input->format, $input->content, $input->latitude, $input->longitude, $this->clock->now());
-        return Response::json($created ? 201 : 200, $this->privateSummary($row) + ['duplicate' => !$created]);
+        $readings = CptReadings::read($input->format, $input->content);
+        if ($readings->problems !== []) {
+            throw new HttpError(422, 'quality_failed', 'The CPT did not pass the quality check: ' . implode(' ', $readings->problems),
+                [], ['problems' => $readings->problems, 'warnings' => $readings->warnings]);
+        }
+        $this->storage->assertRoom();
+        [$row, $created] = $this->privateCpts->create($user, $input, $readings, $this->clock->now());
+        $warnings = $readings->warnings;
+        if ($input->testDate === null) {
+            $warnings[] = 'No test date was given.';
+        }
+        return Response::json($created ? 201 : 200, $this->uploadSummary($row) + [
+            'duplicate' => !$created,
+            'warnings' => $warnings,
+            'possibleDuplicates' => $created ? $this->possibleDuplicates($user, $row) : [],
+        ]);
+    }
+
+    /**
+     * CPTs that may be the same test as a new upload: uploads the uploader
+     * can see within the larger of the two location accuracies (at least
+     * 25 m) with the same test date and final depth (0.5 m) where both are
+     * known, and DOV CPTs within the upload's accuracy (10-100 m).
+     */
+    private function possibleDuplicates(User $user, array $row): array
+    {
+        if ($row['latitude'] === null || $row['longitude'] === null) {
+            return [];
+        }
+        $latitude = (float)$row['latitude'];
+        $longitude = (float)$row['longitude'];
+        $accuracy = (float)($row['location_accuracy_m'] ?? self::DUPLICATE_MIN_RADIUS_M);
+        $found = [];
+        $radius = max(self::DUPLICATE_MIN_RADIUS_M, min($accuracy, 2000.0));
+        [$minLat, $maxLat, $minLon, $maxLon] = Distance::box($latitude, $longitude, $radius + 2000);
+        foreach ($this->privateCpts->inBox($user, $minLat, $maxLat, $minLon, $maxLon, 200) as $other) {
+            if ($other['public_id'] === $row['public_id'] || $other['latitude'] === null) {
+                continue;
+            }
+            $distance = Distance::metres($latitude, $longitude, (float)$other['latitude'], (float)$other['longitude']);
+            $reach = max($radius, min((float)($other['location_accuracy_m'] ?? self::DUPLICATE_MIN_RADIUS_M), 2000.0));
+            $sameDate = $row['test_date'] === null || $other['test_date'] === null || $row['test_date'] === $other['test_date'];
+            $sameDepth = $row['depth_max_m'] === null || $other['depth_max_m'] === null || abs((float)$row['depth_max_m'] - (float)$other['depth_max_m']) <= 0.5;
+            if ($distance <= $reach && $sameDate && $sameDepth) {
+                $found[] = ['kind' => 'upload', 'id' => $other['public_id'], 'name' => $other['name'], 'distance' => round($distance, 1),
+                    'testDate' => $other['test_date'], 'owner' => $other['owner_name']];
+            }
+        }
+        $dovRadius = max(10.0, min($accuracy, 100.0));
+        [$minLat, $maxLat, $minLon, $maxLon] = Distance::box($latitude, $longitude, $dovRadius);
+        foreach ($this->stores[DovKind::Cpt->value]->inBox($minLat, $maxLat, $minLon, $maxLon, 50) as $dov) {
+            $distance = Distance::metres($latitude, $longitude, (float)$dov['latitude'], (float)$dov['longitude']);
+            if ($distance <= $dovRadius) {
+                $found[] = ['kind' => 'dov', 'dovId' => $dov['dov_id'], 'name' => $dov['name'], 'distance' => round($distance, 1)];
+            }
+        }
+        usort($found, static fn(array $a, array $b): int => $a['distance'] <=> $b['distance']);
+        return array_slice($found, 0, 20);
     }
 
     private function getPrivate(string $id, User $user): Response
     {
-        $row = $this->privateCpts->find($user->id, $id, true);
+        $row = $this->privateCpts->find($user, $id, true);
         if ($row === null) {
-            throw new HttpError(404, 'not_found', 'No private CPT with this id.');
+            throw new HttpError(404, 'not_found', 'No uploaded CPT with this id that this key may see.');
         }
-        return Response::json(200, $this->privateSummary($row) + ['content' => $row['content']]);
+        return Response::json(200, $this->uploadSummary($row) + ['content' => $row['content']]);
     }
 
     private function deletePrivate(string $id, User $user): Response
@@ -431,24 +518,34 @@ final class App
         if (!$user->canWrite) {
             throw new HttpError(403, 'forbidden', 'This key may not change CPTs.');
         }
-        if (!$this->privateCpts->delete($user->id, $id)) {
-            throw new HttpError(404, 'not_found', 'No private CPT with this id.');
+        if (!$this->privateCpts->delete($user, $id)) {
+            throw new HttpError(404, 'not_found', 'No upload of yours with this id.');
         }
         return Response::json(200, ['id' => $id, 'deleted' => true]);
     }
 
-    private function privateSummary(array $row): array
+    private function uploadSummary(array $row): array
     {
         return [
-            'kind' => 'private',
-            'private' => true,
+            'kind' => 'upload',
+            'private' => $row['visibility'] === 'private',
+            'visibility' => $row['visibility'],
             'id' => $row['public_id'],
             'name' => $row['name'],
+            'owner' => $row['owner_name'],
             'format' => $row['format'],
             'sha256' => $row['sha256'],
             'bytes' => (int)$row['byte_length'],
             'createdAt' => Clock::iso($row['created_at']),
+            'testDate' => $row['test_date'],
+            'rowCount' => $row['row_count'] === null ? null : (int)$row['row_count'],
+            'finalDepth' => $row['depth_max_m'] === null ? null : (float)$row['depth_max_m'],
             'position' => $row['latitude'] === null ? null : ['latitude' => (float)$row['latitude'], 'longitude' => (float)$row['longitude']],
+            'location' => $row['location_method'] === null ? null : [
+                'method' => $row['location_method'],
+                'accuracyM' => $row['location_accuracy_m'] === null ? null : (int)$row['location_accuracy_m'],
+                'text' => $row['location_text'],
+            ],
         ];
     }
 

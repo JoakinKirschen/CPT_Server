@@ -13,6 +13,11 @@ fetches that XML server-side, stores it (with every revision), and returns it
 to the app together with its provenance: retrieval time, SHA-256 and
 attribution.
 
+DOV data is public, so reading it needs no key (1.2.0). Users with a key can
+also upload their own CPTs, after an automatic quality check. Each upload
+stays private, is shared with the uploader's group, or goes into the shared
+library for every key, and it records how exactly its position is known.
+
 It runs on ordinary shared hosting: PHP 8.3, MySQL/MariaDB, Apache or
 LiteSpeed with `.htaccess`, and cron. It needs no Composer packages, no
 long-running processes and no root access. See
@@ -20,30 +25,44 @@ long-running processes and no root access. See
 
 ## API
 
-Base URL, for example `https://nightdust.eu/cpt-api`. Every request needs the
-header `X-Api-Key: cptlib_…`. The only exception is the CORS preflight
-(`OPTIONS`), which browsers send without custom headers. Responses are JSON,
+Base URL, for example `https://nightdust.eu/cpt-api`. Responses are JSON,
 `Cache-Control: no-store`.
+
+- **Without a key** you can read DOV objects and search near a point:
+  `GET /`, `GET /cpt/{dovId}`, `GET /borehole/{dovId}`,
+  `GET /interpretation/{dovId}` and the `near` searches. These are limited
+  per IP address (see *Rate limits and cache* under Security). A `near` search without a key
+  returns no uploads.
+- **With a key** (`X-Api-Key: cptlib_…`) you can also refresh DOV objects,
+  read earlier revisions, and upload, read and delete uploads. A key has
+  its own, larger limits.
+- A key that is sent must be valid. An invalid key is refused with 401; it is
+  never treated as "no key".
+- `public.enabled => false` in the config turns keyless reads off, so every
+  request needs a key again, as before 1.2.0.
+- The CORS preflight (`OPTIONS`) never needs a key.
 
 | Method and path | What it does |
 |---|---|
-| `GET /` | Connection test: returns your user name and the licence. |
-| `GET /cpt/{dovId}` | Returns the stored DOV CPT. If it is missing, the server fetches it from DOV, stores it and returns it. |
-| `GET /cpt/{dovId}?refresh=1` | Asks DOV again, unless the stored copy was checked less than 24 h ago. If the XML changed, a new revision is stored and the old one is kept. |
-| `GET /cpt/{dovId}?revision={sha256}` | Returns an exact earlier revision. |
-| `GET /cpt/{dovId}?format=xml` | Returns the raw XML; the metadata comes in `X-Cpt-*` headers. |
-| `GET /cpt/{dovId}/revisions` | Lists every stored revision. |
-| `GET /cpt?near={lat},{lon}&radius={m}` | Lists the CPTs in the library within the radius (default 1000 m, max 10 000 m), sorted by distance. It never asks DOV. |
-| `POST /cpt` | Stores one of your own CPTs as GEF or CSV text. It is flagged as private. |
-| `GET /cpt/{privateId}` | Returns one of your private CPTs. |
-| `DELETE /cpt/{privateId}` | Deletes one of your private CPTs. |
-| `GET /borehole/{dovId}` | Returns the stored DOV borehole (*boring*), fetched from DOV when missing. Takes `refresh`, `revision` and `format` like a CPT, and has `/revisions`. |
-| `GET /interpretation/{dovId}` | The same for a DOV interpretation (*interpretatie*), such as a borehole's lithological description. |
-| `GET /borehole?near={lat},{lon}&radius={m}` | Lists the boreholes in the library within the radius, like the CPT search. It never asks DOV. |
+| Method and path | Key | What it does |
+|---|---|---|
+| `GET /` | no | Connection test: returns your user name (or `"anonymous": true`), the version and the licence. |
+| `GET /cpt/{dovId}` | no | Returns the stored DOV CPT. If it is missing, the server fetches it from DOV, stores it and returns it. |
+| `GET /cpt/{dovId}?refresh=1` | yes | Asks DOV again, unless the stored copy was checked less than 24 h ago. If the XML changed, a new revision is stored and the old one is kept. |
+| `GET /cpt/{dovId}?revision={sha256}` | yes | Returns an exact earlier revision. |
+| `GET /cpt/{dovId}?format=xml` | no | Returns the raw XML; the metadata comes in `X-Cpt-*` headers. |
+| `GET /cpt/{dovId}/revisions` | yes | Lists every stored revision. |
+| `GET /cpt?near={lat},{lon}&radius={m}` | no | Lists the CPTs in the library within the radius (default 1000 m, max 10 000 m), sorted by distance: DOV CPTs in `dov`, and the uploads your key may see in `uploads`. It never asks DOV. |
+| `POST /cpt` | yes | Uploads one of your own CPTs as GEF or CSV text, after the quality check. |
+| `GET /cpt/{uploadId}` | yes | Returns an upload your key may see, with its text. |
+| `DELETE /cpt/{uploadId}` | yes | Deletes one of your own uploads. |
+| `GET /borehole/{dovId}` | no | Returns the stored DOV borehole (*boring*), fetched from DOV when missing. Takes `refresh`, `revision` and `format` like a CPT, and has `/revisions`. |
+| `GET /interpretation/{dovId}` | no | The same for a DOV interpretation (*interpretatie*), such as a borehole's lithological description. |
+| `GET /borehole?near={lat},{lon}&radius={m}` | no | Lists the boreholes in the library within the radius, like the CPT search. It never asks DOV. |
 
 `{dovId}` must match `^\d{4}-\d{6}$`. This is `DOV_IDENTIFIER_ONLY` from the
 app's `js/project-information.js`, for example `2002-009953`.
-`{privateId}` looks like `p-0123456789abcdef`. Anything else gets a 400 error.
+`{uploadId}` looks like `p-0123456789abcdef`. Anything else gets a 400 error.
 Boreholes and interpretations use the same id pattern; the same id in two
 datasets names two different DOV objects, each stored on its own.
 
@@ -139,23 +158,92 @@ X-Api-Key: cptlib_…
 Content-Type: application/json
 
 { "name": "Site A – S1", "format": "gef", "content": "#GEFID= 1, 1, 0\r\n…#EOH=\r\n…",
-  "latitude": 51.05, "longitude": 3.72 }
+  "visibility": "library",
+  "latitude": 51.05, "longitude": 3.72,
+  "location": { "method": "street", "text": "Kerkstraat, 9000 Gent" },
+  "testDate": "2025-03-04" }
 ```
 
 - `format` is `gef` or `csv`. If you leave it out, the server detects it.
   GEF needs `#GEFID` and `#EOH`; CSV needs at least two rows of numbers.
-- `latitude` and `longitude` are optional, but give both or neither.
-- The limit is 3 MB of text (kept under PHP's `post_max_size` of 8 MB,
-  because JSON escaping can nearly double the size). A body that carries `dovId`, `url` or `sourceUrl` is
-  refused.
-- The answer is `201` with `{"kind": "private", "private": true, "id": "p-…", …}`.
-  Uploading the same text again returns the existing record with `200` and
-  `"duplicate": true`.
+- `visibility` decides who sees the upload:
+  - `private` (the default): only the uploader;
+  - `group`: the uploader and every key in the uploader's group
+    (`bin/keys.php group`);
+  - `library`: every key.
 
-Private CPTs live in their own table and have their own id space. Only their
-owner sees them: for any other key they read as "not found". They never appear
-among the DOV results. `GET /cpt?near=` returns them in a separate `private`
-array.
+  Uploads are never visible without a key.
+- `latitude` and `longitude` are optional for a private upload. A group or
+  library upload needs both, and `location.method`. Give both or neither.
+- `location` says how the position is known, because many CPTs carry only a
+  street or a municipality:
+
+  | `method` | Meaning | Default accuracy |
+  |---|---|---|
+  | `survey` | Measured coordinates, for example from the GEF header | 5 m |
+  | `address` | A street and house number | 25 m |
+  | `map` | Placed by hand on a map | 50 m |
+  | `street` | A street without a number | 250 m |
+  | `municipality` | Only the municipality | 2000 m |
+
+  `accuracyM` (1–20 000 m) overrides the default. `text` (at most 200
+  characters) keeps the address or place name as given.
+- `testDate` is the date of the test (`YYYY-MM-DD`). It is optional, but
+  the answer warns when it is missing because it helps to find duplicates.
+- The limit is 3 MB of text (kept under PHP's `post_max_size` of 8 MB,
+  because JSON escaping can nearly double the size). A body that carries
+  `dovId`, `url` or `sourceUrl` is refused.
+
+**Quality check.** Before anything is stored, the server reads the depth,
+qc and fs columns:
+
+- GEF: by their `#COLUMNINFO` quantity numbers (11 corrected depth or 1
+  penetration length, 2 qc, 3 fs), with kPa converted to MPa.
+- CSV: in that order, or by a header row naming them.
+
+The upload is refused with `422 quality_failed` and a `problems` list when:
+
+- it has fewer than 10 readings;
+- the depth goes back up;
+- a depth is outside 0–100 m;
+- a qc is outside 0–100 MPa, or an fs outside 0–2 MPa (usually kPa sent as
+  MPa);
+- the readings cover less than 0.5 m;
+- every qc is zero.
+
+It is stored, but with `warnings`, when it has no fs, when many friction
+ratios are above 15 %, or when no test date was given. Nobody reviews
+uploads by hand.
+
+**Answer.** `201` with a summary:
+
+```json
+{ "kind": "upload", "private": false, "visibility": "library", "id": "p-…",
+  "name": "Site A – S1", "owner": "joakin", "format": "gef", "sha256": "…", "bytes": 5321,
+  "createdAt": "…", "testDate": "2025-03-04", "rowCount": 412, "finalDepth": 20.6,
+  "position": { "latitude": 51.05, "longitude": 3.72 },
+  "location": { "method": "street", "accuracyM": 250, "text": "Kerkstraat, 9000 Gent" },
+  "duplicate": false, "warnings": [],
+  "possibleDuplicates": [ { "kind": "dov", "dovId": "2002-009953", "name": "…", "distance": 41.2 } ] }
+```
+
+- **Exact duplicates.** If you can already see an upload with exactly the
+  same text, it is not stored again. Its summary comes back with `200` and
+  `"duplicate": true`. An upload you cannot see (another user's private
+  one) is never revealed, so you get your own copy.
+- **Possible duplicates.** `possibleDuplicates` lists the CPTs that may be
+  the same test, nearest first:
+  - uploads you can see, within the larger of the two location accuracies
+    (at least 25 m, at most 2 km), with the same test date and a final
+    depth within 0.5 m where both are known;
+  - DOV CPTs in the library within the upload's accuracy (10–100 m).
+
+  They are only reported. Nothing is merged.
+
+Uploads live in their own table (`private_cpts`) and their own id space, and
+never appear among the DOV results. For a key that may not see an upload it
+reads as "not found". `GET /cpt?near=` returns uploads in the `uploads`
+array (named `private` before 1.2.0), each with its `location`.
 
 ### Errors
 
@@ -166,15 +254,17 @@ contains stack traces, SQL or file paths. A 500 response also carries a
 | Status | Codes |
 |---|---|
 | 400 | `invalid_id`, `invalid_path`, `invalid_near`, `invalid_radius`, `invalid_revision`, `invalid_body` |
-| 401 | `unauthorized` |
+| 401 | `unauthorized` (no key where one is needed, or an invalid key) |
 | 403 | `https_required`, `forbidden` |
 | 404 | `not_found` |
 | 405 | `method_not_allowed` |
 | 413 | `payload_too_large` |
 | 415 | `unsupported_media_type` |
+| 422 | `quality_failed` (with `problems` and `warnings`) |
 | 429 | `rate_limited`, `dov_rate_limited` (both with `Retry-After`) |
 | 502 | `upstream_unavailable`, `upstream_invalid`, `upstream_redirect`, `upstream_too_large` |
 | 503 | `busy`, `database_unavailable` |
+| 507 | `storage_full`: the database reached `storage.max_database_mb`. Stored objects are still served. |
 
 ## Security
 
@@ -193,24 +283,36 @@ contains stack traces, SQL or file paths. A 500 response also carries a
   Responses are capped at 8 MB and must be well-formed XML. The parser
   loads no external entities and makes no network access. This is not a
   proxy.
-- **API keys.** Every request needs `X-Api-Key`. Keys are random, with
+- **API keys.** Reading DOV objects needs no key. Everything else needs
+  `X-Api-Key`, and a key that is sent must be valid. Keys are random, with
   238 bits of entropy. The database stores only an HMAC-SHA256 hash of each
   key, made with a secret pepper from the config file. Each user has one key.
-  You create, rotate, revoke and list keys with `bin/keys.php`. Keys are
-  never accepted in the URL.
+  You create, rotate, revoke and list keys, and put users in groups, with
+  `bin/keys.php`. Keys are never accepted in the URL.
 - **CORS is not authentication.** The server allows `Origin: null` (the
   file:// app) and the `X-Api-Key` header, with no cookies or credentials.
-  A request from any origin still needs a valid key; CORS only decides
+  Uploads still need a valid key from any origin. CORS only decides
   whether a browser lets the page read the answer.
-- **Rate limits and cache.** Each key is limited per minute and per day, and
-  POSTs per hour. Failed logins are limited per IP. DOV has two fetch budgets
-  of its own, one per user per hour and one for the whole server per minute.
+- **Rate limits and cache.**
+  - Each key is limited per minute and per day, and POSTs per hour.
+  - Requests without a key are limited per IP address, per minute and per
+    day.
+  - Failed logins are limited per IP.
+  - DOV fetches have budgets of their own: per key per hour, or without a
+    key per IP address per hour and for all keyless requests together per
+    day, and one for the whole server per minute.
+
   On top of that:
   - Stored CPTs and boreholes are served without asking DOV.
   - A refresh within 24 h of the last check is skipped.
   - A DOV "not found", or an answer that is not CPT XML, is remembered
     for 1 h.
   - Only one fetch per object runs at a time (MySQL `GET_LOCK`).
+- **Storage cap.** `storage.max_database_mb` (default 2048) caps what can
+  be added. When the tables reach it, nothing new is fetched or uploaded
+  (`507 storage_full`), and stored objects are still served, stale if a
+  refresh was asked for. Uploads are also refused when they fail the
+  quality check, so a bad file never reaches the database.
 - **Database.** Every query is a prepared statement, with server-side
   prepares and strict SQL mode.
 - **Secrets.** `config/config.php` holds the database password and the key
@@ -291,10 +393,12 @@ php tests/run.php revision        # tests whose name contains "revision"
 
 The tests cover id validation, the DOV-only URL rule, redirects,
 authentication, key hashing and revocation, rate limits, revisions, the
-"not found" cache, CORS headers, private CPTs, the `near` search, JSON
+"not found" cache, CORS headers, uploads, the `near` search, JSON
 errors, logs without keys, a backup and restore round trip, and boreholes
 and interpretations (their URLs, classification, storage apart from the
-CPTs, revisions, shared budgets and their own `near` search). Most of them
+CPTs, revisions, shared budgets and their own `near` search). Since 1.2.0
+they also cover keyless reads and their budgets, the storage cap, the
+quality check, visibility and groups, and the duplicate checks. Most of them
 need an **empty test database whose name contains `test`**, because the
 tests drop all its tables. Configure it in `tests/config.test.php` (copy
 `tests/config.test.example.php`) or with the `CPT_TEST_DB_*` environment

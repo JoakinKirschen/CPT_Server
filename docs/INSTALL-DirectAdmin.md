@@ -106,7 +106,8 @@ php bin/migrate.php
 
 Without SSH, open **phpMyAdmin**, select `USER_cptlib`, go to the *SQL* tab,
 and paste the contents of `migrations/001_initial.sql`, then
-`migrations/002_boreholes.sql`, in that order. Each file records its own
+`migrations/002_boreholes.sql`, then `migrations/003_public_and_uploads.sql`,
+in that order. Each file records its own
 version, so `bin/migrate.php` will not apply it twice later.
 
 ## 6. Web folder
@@ -131,12 +132,23 @@ path with 403.
 ## 7. API keys
 
 ```sh
-php bin/keys.php create joakin            # prints the key once: store it safely
+php bin/keys.php create joakin --group=office   # prints the key once: store it safely
 php bin/keys.php create colleague --read-only
+php bin/keys.php group colleague office   # puts a user in a group (- for none)
 php bin/keys.php list
 php bin/keys.php rotate joakin            # new key, old one stops working
 php bin/keys.php revoke colleague
 ```
+
+- **Reading DOV needs no key.** Structural Canvas reads DOV CPTs and
+  boreholes through the library without one.
+- **Uploading needs a key** that may write, so give one to each person
+  whose uploads you trust. A `--read-only` key can see uploads but not add
+  any.
+- **Groups.** An upload marked `group` is visible to every key in the
+  uploader's group, for example one office. Group names are 1–64
+  letters, digits, `.`, `_`, `@` and `-`. A user who leaves the group no longer sees its
+  group uploads.
 
 ## 8. Check it
 
@@ -146,7 +158,8 @@ curl -s https://nightdust.eu/cpt-api/ -H "X-Api-Key: $KEY"
 curl -s https://nightdust.eu/cpt-api/cpt/2002-009953 -H "X-Api-Key: $KEY" | head -c 600
 curl -s "https://nightdust.eu/cpt-api/cpt?near=51.05,3.72&radius=2000" -H "X-Api-Key: $KEY"
 curl -s -i -X OPTIONS https://nightdust.eu/cpt-api/cpt/2002-009953 -H "Origin: null" -H "Access-Control-Request-Headers: x-api-key"
-curl -s https://nightdust.eu/cpt-api/                                   # 401 without a key
+curl -s https://nightdust.eu/cpt-api/                                   # "anonymous": true without a key
+curl -s https://nightdust.eu/cpt-api/ -H "X-Api-Key: wrong"             # 401 with a wrong key
 ```
 
 The first CPT request should answer `"cache":"miss"` and the second
@@ -206,7 +219,7 @@ php tests/run.php
 ```sh
 cd ~/cpt-library
 git pull
-php bin/migrate.php
+php bin/migrate.php      # 1.2.0 adds migrations/003_public_and_uploads.sql
 cp public/index.php public/.htaccess ~/domains/nightdust.eu/public_html/cpt-api/   # only if they changed
 php tests/run.php        # optional, against the test database
 ```
@@ -264,7 +277,11 @@ does this.
      then delete the job, read `cpt-output.txt` and delete the file.
    - To update, upload the new ZIP and replace the folder, but keep
      `config/config.php`. Then run `bin/migrate.php --to-file` once the same
-     way.
+     way. (Or paste the new files from `migrations/` into phpMyAdmin's
+     *SQL* tab, oldest first; for 1.2.0 that is
+     `003_public_and_uploads.sql`.)
+   - Put a user in a group with
+     `/usr/local/bin/php /home/USER/cpt-library/bin/keys.php group joakin office --to-file`.
 
 ## Troubleshooting
 

@@ -17,6 +17,10 @@ use PDO;
  * refresh is due. DOV is protected by the refresh cooldown, the short-term
  * cache of misses ("not found" or not CPT XML), a per-id lock (one fetch at a time) and two fetch budgets (per
  * user per hour, whole server per minute, shared by every dataset).
+ * Without a key (1.2.0) the per-user budget is one per IP address per hour
+ * plus one for all keyless requests per day; refresh and earlier revisions
+ * need a key. Nothing new is stored while the StorageGuard says the
+ * database is full.
  */
 final class CptService
 {
@@ -33,16 +37,20 @@ final class CptService
         private RateLimiter $limiter,
         private Clock $clock,
         private Config $config,
+        private StorageGuard $storage,
     ) {
     }
 
     /**
      * @return array{revision: array<string,mixed>, record: array<string,mixed>, cache: string, change: ?string, warning: ?string}
      */
-    public function get(string $dovId, User $user, bool $refresh, ?string $revisionSha): array
+    public function get(string $dovId, ?User $user, bool $refresh, ?string $revisionSha, string $clientIp = ''): array
     {
         $kind = $this->cpts->kind();
         $label = $kind->label();
+        if ($user === null && ($refresh || $revisionSha !== null)) {
+            throw new HttpError(401, 'unauthorized', 'A key is needed to ask DOV again or to read an earlier revision.');
+        }
         if ($revisionSha !== null) {
             if (preg_match('/^[0-9a-f]{64}\z/', $revisionSha) !== 1) {
                 throw new HttpError(400, 'invalid_revision', 'revision must be a lower-case SHA-256 (64 hex characters).');
@@ -87,24 +95,33 @@ final class CptService
                 $this->throwRecentMiss($dovId, $this->clock->now(), $label);
             }
 
-            $retry = $this->limiter->hit('dov:user:' . $user->id, $this->config->int('rate_limit.dov_fetches_per_user_per_hour'), 3600)
-                ?? $this->limiter->hit('dov:global', $this->config->int('rate_limit.dov_fetches_global_per_minute'), 60);
+            if ($this->storage->full()) {
+                if ($record !== null) {
+                    return $this->result($dovId, self::CACHE_STALE, null, 'The library is full; the library copy is served.');
+                }
+                $this->storage->assertRoom();
+            }
+            $retry = $user !== null
+                ? $this->limiter->hit('dov:user:' . $user->id, $this->config->int('rate_limit.dov_fetches_per_user_per_hour'), 3600)
+                : ($this->limiter->hit('dov:anon:ip:' . $clientIp, $this->config->int('rate_limit.dov_fetches_anonymous_per_ip_per_hour'), 3600)
+                    ?? $this->limiter->hit('dov:anon:day', $this->config->int('rate_limit.dov_fetches_anonymous_per_day'), 86400));
+            $retry ??= $this->limiter->hit('dov:global', $this->config->int('rate_limit.dov_fetches_global_per_minute'), 60);
             if ($retry !== null) {
                 if ($record !== null) {
                     return $this->result($dovId, self::CACHE_STALE, null, 'The DOV request budget is used up for now; the library copy is served.');
                 }
-                throw new HttpError(429, 'dov_rate_limited', "Too many new {$label}s requested from DOV; try again later.", ['Retry-After' => (string)$retry], ['retryAfter' => $retry]);
+                throw new HttpError(429, 'dov_rate_limited', "Too many new {$label}s requested from DOV" . ($user === null ? ' without a key' : '') . '; try again later.', ['Retry-After' => (string)$retry], ['retryAfter' => $retry]);
             }
 
             $fetched = $this->dov->fetch($dovId, $kind);
             $fetchedAt = $this->clock->now();
             $this->cpts->logFetch(
-                $dovId, $user->id, $fetchedAt, $fetched->httpStatus, $fetched->outcome,
+                $dovId, $user?->id, $fetchedAt, $fetched->httpStatus, $fetched->outcome,
                 $fetched->ok() ? hash('sha256', $fetched->body) : null, $fetched->ok() ? strlen($fetched->body) : null, $fetched->durationMs
             );
 
             if ($fetched->ok()) {
-                $change = $this->cpts->store($dovId, $fetched->body, $fetchedAt, $user->id);
+                $change = $this->cpts->store($dovId, $fetched->body, $fetchedAt, $user?->id);
                 return $this->result($dovId, $record === null ? self::CACHE_MISS : self::CACHE_REFRESHED, $change);
             }
             if ($record !== null) {

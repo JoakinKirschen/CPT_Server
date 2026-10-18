@@ -10,6 +10,8 @@ use PDO;
 /**
  * API keys: one per user, stored only as an HMAC-SHA256 hash (keyed with
  * the config pepper), revocable. The key itself is shown once, at creation.
+ * A user may belong to a group (1.2.0): group uploads are visible to its
+ * members.
  */
 final class ApiKeys
 {
@@ -45,7 +47,7 @@ final class ApiKeys
         if ($key === null || preg_match(self::KEY_PATTERN, $key) !== 1) {
             return null;
         }
-        $statement = $this->pdo->prepare('SELECT id, name, can_write, last_used_at FROM api_users WHERE key_hash = ? AND revoked_at IS NULL');
+        $statement = $this->pdo->prepare('SELECT id, name, can_write, group_name, last_used_at FROM api_users WHERE key_hash = ? AND revoked_at IS NULL');
         $statement->execute([$this->hash($key)]);
         $row = $statement->fetch();
         if (!$row) {
@@ -56,18 +58,21 @@ final class ApiKeys
         if ($row['last_used_at'] === null || strtotime((string)$row['last_used_at'] . ' UTC') < $now->getTimestamp() - 300) {
             $this->pdo->prepare('UPDATE api_users SET last_used_at = ? WHERE id = ?')->execute([Clock::sql($now), $row['id']]);
         }
-        return new User((int)$row['id'], (string)$row['name'], (bool)$row['can_write']);
+        return new User((int)$row['id'], (string)$row['name'], (bool)$row['can_write'], $row['group_name'] === null ? null : (string)$row['group_name']);
     }
 
     /** Creates the user with a new key. @return string the key (show once) */
-    public function create(string $name, bool $canWrite = true): string
+    public function create(string $name, bool $canWrite = true, ?string $group = null): string
     {
         $this->assertName($name);
+        if ($group !== null) {
+            $this->assertName($group);
+        }
         $key = self::generate();
         $now = Clock::sql($this->clock->now());
-        $statement = $this->pdo->prepare('INSERT INTO api_users (name, key_hash, key_hint, key_created_at, can_write, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+        $statement = $this->pdo->prepare('INSERT INTO api_users (name, key_hash, key_hint, key_created_at, can_write, group_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
         try {
-            $statement->execute([$name, $this->hash($key), substr($key, -4), $now, $canWrite ? 1 : 0, $now]);
+            $statement->execute([$name, $this->hash($key), substr($key, -4), $now, $canWrite ? 1 : 0, $group, $now]);
         } catch (\PDOException $e) {
             if ($e->getCode() === '23000') {
                 throw new \RuntimeException("User {$name} already exists; use rotate to give them a new key.");
@@ -89,6 +94,21 @@ final class ApiKeys
         return $key;
     }
 
+    /** Puts the user in $group, or in none when $group is null. */
+    public function setGroup(string $name, ?string $group): void
+    {
+        if ($group !== null) {
+            $this->assertName($group);
+        }
+        $statement = $this->pdo->prepare('UPDATE api_users SET group_name = ? WHERE name = ?');
+        $statement->execute([$group, $name]);
+        $check = $this->pdo->prepare('SELECT COUNT(*) FROM api_users WHERE name = ?');
+        $check->execute([$name]);
+        if ((int)$check->fetchColumn() !== 1) {
+            throw new \RuntimeException("No user named {$name}.");
+        }
+    }
+
     public function revoke(string $name): void
     {
         $statement = $this->pdo->prepare('UPDATE api_users SET key_hash = NULL, revoked_at = ? WHERE name = ? AND revoked_at IS NULL');
@@ -101,13 +121,13 @@ final class ApiKeys
     /** @return list<array<string,mixed>> */
     public function list(): array
     {
-        return $this->pdo->query('SELECT name, key_hint, can_write, key_created_at, last_used_at, revoked_at, created_at FROM api_users ORDER BY name')->fetchAll();
+        return $this->pdo->query('SELECT name, key_hint, can_write, group_name, key_created_at, last_used_at, revoked_at, created_at FROM api_users ORDER BY name')->fetchAll();
     }
 
     private function assertName(string $name): void
     {
         if (preg_match(self::NAME_PATTERN, $name) !== 1) {
-            throw new \InvalidArgumentException('User names are 1-64 characters: letters, digits, . _ @ -');
+            throw new \InvalidArgumentException('User and group names are 1-64 characters: letters, digits, . _ @ -');
         }
     }
 }

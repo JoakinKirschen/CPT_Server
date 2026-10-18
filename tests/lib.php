@@ -177,6 +177,27 @@ function interpretation_xml(int $variant = 0, string $id = '2016-180001', string
     ]);
 }
 
+/**
+ * A GEF CPT as Structural Canvas writes it (gefText): $rows readings 0.2 m
+ * apart from 0.2 m, qc rising from $qc MPa, fs 0.04 MPa; $variant changes
+ * the qc so the hash differs.
+ */
+function upload_gef(int $rows = 20, float $qc = 2.0, int $variant = 0): string
+{
+    $lines = [
+        '#GEFID= 1, 1, 0', '#PROCEDURECODE= GEF-CPT-Report, 1, 1, 2', '#COLUMN= 5',
+        '#COLUMNINFO= 1, m, penetration length, 1', '#COLUMNINFO= 2, MPa, cone resistance, 2', '#COLUMNINFO= 3, MPa, sleeve friction, 3',
+        '#COLUMNINFO= 4, %, friction ratio, 4', '#COLUMNINFO= 5, MPa, pore pressure u2, 6',
+        '#COLUMNVOID= 2, -9999', '#COLUMNVOID= 3, -9999', '#COLUMNVOID= 4, -9999', '#COLUMNVOID= 5, -9999',
+        '#COLUMNSEPARATOR= ;', '#RECORDSEPARATOR= !', '#EOH=',
+    ];
+    for ($i = 1; $i <= $rows; $i++) {
+        $value = $qc + $i * 0.1 + $variant / 1000;
+        $lines[] = sprintf('%.2f;%.3f;0.04;%.3f;-9999;!', $i * 0.2, $value, 0.04 / $value * 100);
+    }
+    return implode("\r\n", $lines) . "\r\n";
+}
+
 function fixture(string $name): string
 {
     return (string)file_get_contents(__DIR__ . '/fixtures/' . $name);
@@ -294,14 +315,14 @@ final class TestApp
         $this->keys = new CptLibrary\Auth\ApiKeys($this->pdo, test_pepper(), $this->clock);
     }
 
-    public function request(string $method, string $path, array $query = [], array $headers = [], string $body = '', bool $https = true): Response
+    public function request(string $method, string $path, array $query = [], array $headers = [], string $body = '', bool $https = true, string $ip = '203.0.113.7'): Response
     {
-        return $this->app->handle(new Request($method, $path, $query, $headers, $body, '203.0.113.7', $https), 'test');
+        return $this->app->handle(new Request($method, $path, $query, $headers, $body, $ip, $https), 'test');
     }
 
-    public function get(string $path, ?string $key, array $query = [], array $headers = []): Response
+    public function get(string $path, ?string $key, array $query = [], array $headers = [], string $ip = '203.0.113.7'): Response
     {
-        return $this->request('GET', $path, $query, ($key === null ? [] : ['X-Api-Key' => $key]) + $headers);
+        return $this->request('GET', $path, $query, ($key === null ? [] : ['X-Api-Key' => $key]) + $headers, '', true, $ip);
     }
 
     public function postJson(string $path, ?string $key, array $data): Response
