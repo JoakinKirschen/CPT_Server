@@ -12,10 +12,11 @@ use CptLibrary\Store\CptRepository;
 use PDO;
 
 /**
- * GET /cpt/{dovId}: the library first, DOV only when the CPT is missing or a
+ * GET /cpt/{dovId} (and /borehole, /interpretation: the repository's
+ * dataset): the library first, DOV only when the object is missing or a
  * refresh is due. DOV is protected by the refresh cooldown, the short-term
  * cache of misses ("not found" or not CPT XML), a per-id lock (one fetch at a time) and two fetch budgets (per
- * user per hour, whole server per minute).
+ * user per hour, whole server per minute, shared by every dataset).
  */
 final class CptService
 {
@@ -40,13 +41,15 @@ final class CptService
      */
     public function get(string $dovId, User $user, bool $refresh, ?string $revisionSha): array
     {
+        $kind = $this->cpts->kind();
+        $label = $kind->label();
         if ($revisionSha !== null) {
             if (preg_match('/^[0-9a-f]{64}\z/', $revisionSha) !== 1) {
                 throw new HttpError(400, 'invalid_revision', 'revision must be a lower-case SHA-256 (64 hex characters).');
             }
             $revision = $this->cpts->revision($dovId, $revisionSha);
             if ($revision === null) {
-                throw new HttpError(404, 'not_found', 'The library has no revision with this SHA-256 for this CPT.');
+                throw new HttpError(404, 'not_found', "The library has no revision with this SHA-256 for this {$label}.");
             }
             return $this->result($dovId, self::CACHE_HIT, null, null, $revision);
         }
@@ -61,18 +64,18 @@ final class CptService
             return $this->result($dovId, self::CACHE_RECENT);
         }
         if ($record === null) {
-            $this->throwRecentMiss($dovId, $now);
+            $this->throwRecentMiss($dovId, $now, $label);
         }
 
-        $lock = 'cptlib:dov:' . $dovId;
+        $lock = 'cptlib:' . $kind->value . ':' . $dovId;
         $wait = $this->config->int('dov.lock_wait_seconds');
         $statement = $this->pdo->prepare('SELECT GET_LOCK(?, ?)');
         $statement->execute([$lock, $wait]);
         if ((int)$statement->fetchColumn() !== 1) {
             if ($record !== null) {
-                return $this->result($dovId, self::CACHE_STALE, null, 'Another request is fetching this CPT from DOV; the library copy is served.');
+                return $this->result($dovId, self::CACHE_STALE, null, "Another request is fetching this {$label} from DOV; the library copy is served.");
             }
-            throw new HttpError(503, 'busy', 'This CPT is being fetched by another request; try again shortly.', ['Retry-After' => '5']);
+            throw new HttpError(503, 'busy', "This {$label} is being fetched by another request; try again shortly.", ['Retry-After' => '5']);
         }
         try {
             // Another request may have fetched it while this one waited.
@@ -81,7 +84,7 @@ final class CptService
                 return $this->result($dovId, $record === null ? self::CACHE_HIT : self::CACHE_REFRESHED);
             }
             if ($current === null) {
-                $this->throwRecentMiss($dovId, $this->clock->now());
+                $this->throwRecentMiss($dovId, $this->clock->now(), $label);
             }
 
             $retry = $this->limiter->hit('dov:user:' . $user->id, $this->config->int('rate_limit.dov_fetches_per_user_per_hour'), 3600)
@@ -90,10 +93,10 @@ final class CptService
                 if ($record !== null) {
                     return $this->result($dovId, self::CACHE_STALE, null, 'The DOV request budget is used up for now; the library copy is served.');
                 }
-                throw new HttpError(429, 'dov_rate_limited', 'Too many new CPTs requested from DOV; try again later.', ['Retry-After' => (string)$retry], ['retryAfter' => $retry]);
+                throw new HttpError(429, 'dov_rate_limited', "Too many new {$label}s requested from DOV; try again later.", ['Retry-After' => (string)$retry], ['retryAfter' => $retry]);
             }
 
-            $fetched = $this->dov->fetch($dovId);
+            $fetched = $this->dov->fetch($dovId, $kind);
             $fetchedAt = $this->clock->now();
             $this->cpts->logFetch(
                 $dovId, $user->id, $fetchedAt, $fetched->httpStatus, $fetched->outcome,
@@ -106,13 +109,13 @@ final class CptService
             }
             if ($record !== null) {
                 $warning = $fetched->outcome === FetchResult::NOT_FOUND
-                    ? 'DOV no longer returns this CPT; the library copy is served.'
+                    ? "DOV no longer returns this {$label}; the library copy is served."
                     : 'DOV could not be reached or returned an error; the library copy is served.';
                 return $this->result($dovId, self::CACHE_STALE, null, $warning);
             }
             throw match ($fetched->outcome) {
-                FetchResult::NOT_FOUND => new HttpError(404, 'not_found', 'DOV has no CPT with this id.'),
-                FetchResult::INVALID => new HttpError(502, 'upstream_invalid', 'DOV did not return CPT XML.'),
+                FetchResult::NOT_FOUND => new HttpError(404, 'not_found', "DOV has no {$label} with this id."),
+                FetchResult::INVALID => new HttpError(502, 'upstream_invalid', "DOV did not return {$label} XML."),
                 FetchResult::TOO_LARGE => new HttpError(502, 'upstream_too_large', 'The DOV XML is larger than this server accepts.'),
                 FetchResult::REDIRECTED => new HttpError(502, 'upstream_redirect', 'DOV answered with a redirect, which this server does not follow.'),
                 default => new HttpError(502, 'upstream_unavailable', 'DOV could not be reached or returned an error.'),
@@ -123,14 +126,14 @@ final class CptService
     }
 
     /** Answers from the short-term cache of DOV misses, without asking DOV. */
-    private function throwRecentMiss(string $dovId, \DateTimeImmutable $now): void
+    private function throwRecentMiss(string $dovId, \DateTimeImmutable $now, string $label): void
     {
         $miss = $this->cpts->recentMiss($dovId, $now, $this->config->int('cache.not_found_ttl_seconds'));
         if ($miss === 'not_found') {
-            throw new HttpError(404, 'not_found', 'DOV has no CPT with this id (checked recently).');
+            throw new HttpError(404, 'not_found', "DOV has no {$label} with this id (checked recently).");
         }
         if ($miss === 'invalid') {
-            throw new HttpError(502, 'upstream_invalid', 'DOV did not return CPT XML for this id (checked recently).');
+            throw new HttpError(502, 'upstream_invalid', "DOV did not return {$label} XML for this id (checked recently).");
         }
     }
 
@@ -139,7 +142,7 @@ final class CptService
         $record = $this->cpts->find($dovId);
         $revision ??= $this->cpts->revision($dovId);
         if ($record === null || $revision === null) {
-            throw new \RuntimeException("CPT {$dovId} vanished while it was read.");
+            throw new \RuntimeException("{$this->cpts->kind()->label()} {$dovId} vanished while it was read.");
         }
         return ['record' => $record, 'revision' => $revision, 'cache' => $cache, 'change' => $change, 'warning' => $warning];
     }

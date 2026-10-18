@@ -9,6 +9,7 @@ declare(strict_types=1);
 use CptLibrary\App;
 use CptLibrary\Clock;
 use CptLibrary\Config;
+use CptLibrary\Dov\DovKind;
 use CptLibrary\Dov\Transport;
 use CptLibrary\Dov\TransportResponse;
 use CptLibrary\Http\Request;
@@ -95,6 +96,19 @@ final class FakeTransport implements Transport
     {
     }
 
+    /** A default that answers each export URL with an object of its dataset and id. */
+    public static function objects(): Closure
+    {
+        return static function (string $url): TransportResponse {
+            preg_match('#/(sondering|boring|interpretatie)/(\d{4}-\d{6})$#', $url, $match);
+            return self::xml(match ($match[1] ?? '') {
+                'boring' => borehole_xml(0, $match[2]),
+                'interpretatie' => interpretation_xml(0, $match[2]),
+                default => sample_xml(0, 152000.0, 212000.0, $match[2] ?? '0000-000000'),
+            });
+        };
+    }
+
     /** A default that answers each export URL with a CPT of that id. */
     public static function cpts(): Closure
     {
@@ -118,8 +132,9 @@ final class FakeTransport implements Transport
     {
         $this->urls[] = $url;
         $this->headers[] = $headers;
-        if ($this->dovRedirect && preg_match('#^https://www\.dov\.vlaanderen\.be/data/sondering/(\d{4}-\d{6})\.xml$#', $url, $match)) {
-            return new TransportResponse(302, '', 'application/xml', $url, null, false, 0, CptLibrary\Dov\DovId::exportUrl($match[1]));
+        if ($this->dovRedirect && preg_match('#^https://www\.dov\.vlaanderen\.be/data/(sondering|boring|interpretatie)/(\d{4}-\d{6})\.xml$#', $url, $match)) {
+            $kind = ['sondering' => DovKind::Cpt, 'boring' => DovKind::Borehole, 'interpretatie' => DovKind::Interpretation][$match[1]];
+            return new TransportResponse(302, '', 'application/xml', $url, null, false, 0, CptLibrary\Dov\DovId::exportUrl($match[2], $kind));
         }
         $response = array_shift($this->queue) ?? $this->default ?? new TransportResponse(0, '', '', '', 'no response queued');
         if ($response instanceof Closure) {
@@ -131,17 +146,35 @@ final class FakeTransport implements Transport
         return $response;
     }
 
-    /** CPT fetches that reached DOV (requests to the XML URL). */
-    public function fetches(): int
+    /** Fetches of one dataset that reached DOV (requests to the XML URL). */
+    public function fetches(DovKind $kind = DovKind::Cpt): int
     {
-        return count(array_filter($this->urls, static fn(string $url): bool => str_contains($url, '/data/sondering/')));
+        return count(array_filter($this->urls, static fn(string $url): bool => str_contains($url, '/data/' . $kind->dovPath() . '/')));
     }
 }
 
 /** The two URLs one fetch of $id requests: DOV's XML URL, then its export URL. */
-function dov_urls(string $id): array
+function dov_urls(string $id, DovKind $kind = DovKind::Cpt): array
 {
-    return [CptLibrary\Dov\DovId::xmlUrl($id), CptLibrary\Dov\DovId::exportUrl($id)];
+    return [CptLibrary\Dov\DovId::xmlUrl($id, $kind), CptLibrary\Dov\DovId::exportUrl($id, $kind)];
+}
+
+/** A borehole XML shaped like DOV's; $variant changes the depth so the hash differs. */
+function borehole_xml(int $variant = 0, string $id = '2016-122561', float $x = 152000.0, float $y = 212000.0): string
+{
+    [$lat, $lon] = CptLibrary\Geo\Lambert72::toWgs84($x, $y);
+    return strtr(fixture('boring-sample.xml'), [
+        '{ID}' => $id, '{X}' => (string)$x, '{Y}' => (string)$y, '{LAT}' => (string)$lat, '{LON}' => (string)$lon,
+        '{DEPTH}' => number_format(6 + $variant, 1, '.', ''),
+    ]);
+}
+
+/** A lithological description XML shaped like DOV's, linked to borehole $borehole. */
+function interpretation_xml(int $variant = 0, string $id = '2016-180001', string $borehole = '2016-122561'): string
+{
+    return strtr(fixture('interpretatie-sample.xml'), [
+        '{ID}' => $id, '{BOREHOLE}' => $borehole, '{DESCRIPTION}' => 'Bruin lemig zand' . ($variant ? " ({$variant})" : ''),
+    ]);
 }
 
 function fixture(string $name): string

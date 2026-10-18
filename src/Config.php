@@ -73,6 +73,11 @@ final class Config
             'url' => 'https://data.vlaanderen.be/doc/licentie/modellicentie-gratis-hergebruik/v1.0',
             // {id}, {date} and {recordUrl} are filled in per CPT.
             'attribution' => 'Databank Ondergrond Vlaanderen, Vlaamse overheid - Departement Mobiliteit en Openbare Werken, Afdeling Geotechniek, sondering {id}, geraadpleegd op {date}, via {recordUrl}',
+            // The same for boreholes and interpretations. DOV holds them
+            // from many data managers, so no single one is named; check
+            // against DOV's dataset records before relying on them.
+            'borehole_attribution' => 'Databank Ondergrond Vlaanderen, Vlaamse overheid, boring {id}, geraadpleegd op {date}, via {recordUrl}',
+            'interpretation_attribution' => 'Databank Ondergrond Vlaanderen, Vlaamse overheid, interpretatie {id}, geraadpleegd op {date}, via {recordUrl}',
         ],
         'paths' => [
             'log_dir' => '',

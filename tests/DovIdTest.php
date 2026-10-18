@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 use CptLibrary\Dov\DovClient;
 use CptLibrary\Dov\DovId;
+use CptLibrary\Dov\DovKind;
 use CptLibrary\Dov\FetchResult;
 use CptLibrary\Dov\TransportResponse;
 
@@ -146,5 +147,42 @@ return [
         $xml = '<?xml version="1.0"?><!DOCTYPE s [<!ENTITY e SYSTEM "file:///etc/passwd">]><s><x>&e;</x></s>';
         $document = CptLibrary\Dov\CptXml::load($xml);
         check($document === null || !str_contains((string)$document->textContent, 'root:'), 'no file contents');
+    },
+
+    'borehole and interpretation URLs are built per dataset, each allowing only its own' => function (): void {
+        same('https://www.dov.vlaanderen.be/data/boring/2016-122561.xml', DovId::xmlUrl('2016-122561', DovKind::Borehole));
+        same('https://www.dov.vlaanderen.be/xdov/proxy/export/boring/2016-122561', DovId::exportUrl('2016-122561', DovKind::Borehole));
+        same('https://www.dov.vlaanderen.be/data/interpretatie/2016-180001', DovId::recordUrl('2016-180001', DovKind::Interpretation));
+        throws(InvalidArgumentException::class, fn() => DovId::xmlUrl('../sondering/2016-122561', DovKind::Borehole));
+        foreach (DovKind::cases() as $kind) {
+            check(DovId::isAllowedFetchUrl(DovId::xmlUrl('2016-122561', $kind), $kind), "{$kind->value}: its XML URL");
+            check(DovId::isAllowedFetchUrl(DovId::exportUrl('2016-122561', $kind), $kind), "{$kind->value}: its export URL");
+            foreach (DovKind::cases() as $other) {
+                if ($other !== $kind) {
+                    check(!DovId::isAllowedFetchUrl(DovId::xmlUrl('2016-122561', $other), $kind), "{$kind->value} refuses the {$other->value} XML URL");
+                    check(!DovId::isAllowedFetchUrl(DovId::exportUrl('2016-122561', $other), $kind), "{$kind->value} refuses the {$other->value} export URL");
+                }
+            }
+        }
+        check(!DovId::isAllowedFetchUrl('https://www.dov.vlaanderen.be/data/boring/2016-122561.xml?x=1', DovKind::Borehole));
+        check(!DovId::isAllowedFetchUrl('http://www.dov.vlaanderen.be/data/boring/2016-122561.xml', DovKind::Borehole));
+        check(!DovId::isAllowedFetchUrl('https://www.dov.vlaanderen.be/data/interpretatie/../boring/2016-122561.xml', DovKind::Interpretation));
+    },
+
+    'a borehole is fetched from its own DOV path, following only its own export redirect' => function (): void {
+        $transport = new FakeTransport(FakeTransport::xml(borehole_xml()));
+        $result = (new DovClient($transport))->fetch('2016-122561', DovKind::Borehole);
+        check($result->ok(), $result->outcome);
+        same(dov_urls('2016-122561', DovKind::Borehole), $transport->urls);
+
+        $transport = new FakeTransport();
+        $transport->dovRedirect = false;
+        $transport->queue = [FakeTransport::redirect(DovId::exportUrl('2016-122561')), FakeTransport::xml(borehole_xml())];
+        same(FetchResult::REDIRECTED, (new DovClient($transport))->fetch('2016-122561', DovKind::Borehole)->outcome, "the CPT export URL is not a borehole's");
+        same(['https://www.dov.vlaanderen.be/data/boring/2016-122561.xml'], $transport->urls);
+
+        $interpretation = new FakeTransport(FakeTransport::xml(interpretation_xml()));
+        check((new DovClient($interpretation))->fetch('2016-180001', DovKind::Interpretation)->ok());
+        same(dov_urls('2016-180001', DovKind::Interpretation), $interpretation->urls);
     },
 ];
