@@ -1,12 +1,14 @@
 # Structural Canvas CPT library server
 
 A small PHP server that keeps a shared library of CPTs (cone penetration
-tests, *sonderingen*) for [Structural Canvas](https://github.com/JoakinKirschen/StructuralCanvas).
+tests, *sonderingen*) and boreholes (*boringen*, with their lithological
+descriptions) for [Structural Canvas](https://github.com/JoakinKirschen/StructuralCanvas).
 
 Structural Canvas is an offline single-file HTML app. It is opened as
 `file://`, so its requests carry `Origin: null`. DOV
 (Databank Ondergrond Vlaanderen) sends no CORS headers, so the app cannot read
-`https://www.dov.vlaanderen.be/data/sondering/<id>.xml` itself. This server
+`https://www.dov.vlaanderen.be/data/sondering/<id>.xml` (or
+`/data/boring/<id>.xml`, `/data/interpretatie/<id>.xml`) itself. This server
 fetches that XML server-side, stores it (with every revision), and returns it
 to the app together with its provenance: retrieval time, SHA-256 and
 attribution.
@@ -35,10 +37,15 @@ header `X-Api-Key: cptlib_…`. The only exception is the CORS preflight
 | `POST /cpt` | Stores one of your own CPTs as GEF or CSV text. It is flagged as private. |
 | `GET /cpt/{privateId}` | Returns one of your private CPTs. |
 | `DELETE /cpt/{privateId}` | Deletes one of your private CPTs. |
+| `GET /borehole/{dovId}` | Returns the stored DOV borehole (*boring*), fetched from DOV when missing. Takes `refresh`, `revision` and `format` like a CPT, and has `/revisions`. |
+| `GET /interpretation/{dovId}` | The same for a DOV interpretation (*interpretatie*), such as a borehole's lithological description. |
+| `GET /borehole?near={lat},{lon}&radius={m}` | Lists the boreholes in the library within the radius, like the CPT search. It never asks DOV. |
 
 `{dovId}` must match `^\d{4}-\d{6}$`. This is `DOV_IDENTIFIER_ONLY` from the
 app's `js/project-information.js`, for example `2002-009953`.
 `{privateId}` looks like `p-0123456789abcdef`. Anything else gets a 400 error.
+Boreholes and interpretations use the same id pattern; the same id in two
+datasets names two different DOV objects, each stored on its own.
 
 ### `GET /cpt/{dovId}`
 
@@ -96,6 +103,34 @@ app's `js/project-information.js`, for example `2002-009953`.
   - If one of the two is missing, it is converted from the other.
   - `position` is `null` if the XML has no usable position.
 
+### `GET /borehole/{dovId}` and `GET /interpretation/{dovId}`
+
+The same answer as a CPT's, with `"type": "borehole"` or
+`"type": "interpretation"` (a CPT's answer says `"type": "cpt"`), the
+dataset's own `sourceUrl` and `recordUrl`
+(`https://www.dov.vlaanderen.be/data/boring/<id>.xml`,
+`…/data/interpretatie/<id>.xml`) and the dataset in the attribution
+(`boring <id>`, `interpretatie <id>`). `name` is the borehole's
+`boornummer`; an interpretation has none.
+
+- They are kept in their own tables (`borehole_*`, `interpretation_*`) with
+  every revision, and share the API key, the request limits and the DOV
+  fetch budgets with the CPTs. The "not found" cache is per dataset.
+- A borehole is the `<boring>` with content in DOV's `<dov-schema>`; an
+  interpretation is the element in `<interpretaties>` (or, without that
+  wrapper, the first element that is not a CPT or a borehole). An empty
+  `<dov-schema>` is a 404 `not_found`; another dataset, or a
+  `dataidentifier` (`permkey`, or a `uri` of the same dataset) naming
+  another id, is refused with `upstream_invalid`. An interpretation's link
+  to its borehole is not its own id.
+- These shapes and DOV's redirect to
+  `/xdov/proxy/export/boring/<id>` (`…/interpretatie/<id>`) follow DOV's
+  schema and the CPT probe; they have not been seen from the host yet. If
+  DOV answers otherwise, the server refuses (`upstream_redirect`,
+  `upstream_invalid`) and stores nothing.
+- `GET /` lists the datasets the server keeps: `"datasets": ["cpt",
+  "borehole", "interpretation"]`.
+
 ### `POST /cpt`
 
 ```http
@@ -143,15 +178,18 @@ contains stack traces, SQL or file paths. A 500 response also carries a
 
 ## Security
 
-- **DOV only.** The server builds the fetch URL itself from a validated id:
-  `https://www.dov.vlaanderen.be/data/sondering/<id>.xml`. No endpoint takes
-  a URL from the client. DOV answers that URL with a 302 to its export URL,
+- **DOV only.** The server builds the fetch URL itself from a validated id
+  and the dataset of the endpoint:
+  `https://www.dov.vlaanderen.be/data/sondering/<id>.xml` (`boring`,
+  `interpretatie` for the other two). No endpoint takes a URL from the
+  client. DOV answers that URL with a 302 to its export URL,
   `https://www.dov.vlaanderen.be/xdov/proxy/export/sondering/<id>`, for
-  the same id. The server follows that one hop, and only when the
+  the same dataset and id. The server follows that one hop, and only when the
   `Location` header is exactly that URL, built from the same validated id.
   cURL itself never follows redirects and is limited to HTTPS. Any other
   redirect, a second redirect, or a response from another URL is refused.
-  Every URL is checked against these two shapes before it is requested.
+  Every URL is checked against these two shapes of its own dataset before
+  it is requested.
   Responses are capped at 8 MB and must be well-formed XML. The parser
   loads no external entities and makes no network access. This is not a
   proxy.
@@ -168,11 +206,11 @@ contains stack traces, SQL or file paths. A 500 response also carries a
   POSTs per hour. Failed logins are limited per IP. DOV has two fetch budgets
   of its own, one per user per hour and one for the whole server per minute.
   On top of that:
-  - Stored CPTs are served without asking DOV.
+  - Stored CPTs and boreholes are served without asking DOV.
   - A refresh within 24 h of the last check is skipped.
   - A DOV "not found", or an answer that is not CPT XML, is remembered
     for 1 h.
-  - Only one fetch per CPT runs at a time (MySQL `GET_LOCK`).
+  - Only one fetch per object runs at a time (MySQL `GET_LOCK`).
 - **Database.** Every query is a prepared statement, with server-side
   prepares and strict SQL mode.
 - **Secrets.** `config/config.php` holds the database password and the key
@@ -221,6 +259,16 @@ live, check them against that record:
 The texts are settings (`licence` in the config), so you can correct them
 without changing code.
 
+Boreholes and interpretations come from DOV under the same licence. DOV
+holds them from many data managers, so their attribution
+(`licence.borehole_attribution`, `licence.interpretation_attribution`)
+names DOV and the Flemish government without one data manager, for
+example *"Databank Ondergrond Vlaanderen, Vlaamse overheid, boring
+2016-122561, geraadpleegd op 2026-10-18, via
+https://www.dov.vlaanderen.be/data/boring/2016-122561"*. Check them against
+DOV's dataset records for *Boringen* and *Interpretaties* before relying on
+them.
+
 ## Repository layout
 
 ```
@@ -244,7 +292,9 @@ php tests/run.php revision        # tests whose name contains "revision"
 The tests cover id validation, the DOV-only URL rule, redirects,
 authentication, key hashing and revocation, rate limits, revisions, the
 "not found" cache, CORS headers, private CPTs, the `near` search, JSON
-errors, logs without keys, and a backup and restore round trip. Most of them
+errors, logs without keys, a backup and restore round trip, and boreholes
+and interpretations (their URLs, classification, storage apart from the
+CPTs, revisions, shared budgets and their own `near` search). Most of them
 need an **empty test database whose name contains `test`**, because the
 tests drop all its tables. Configure it in `tests/config.test.php` (copy
 `tests/config.test.example.php`) or with the `CPT_TEST_DB_*` environment

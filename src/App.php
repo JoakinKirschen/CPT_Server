@@ -9,6 +9,7 @@ use CptLibrary\Auth\User;
 use CptLibrary\Dov\CurlTransport;
 use CptLibrary\Dov\DovClient;
 use CptLibrary\Dov\DovId;
+use CptLibrary\Dov\DovKind;
 use CptLibrary\Dov\Transport;
 use CptLibrary\Geo\Distance;
 use CptLibrary\Http\Cors;
@@ -29,6 +30,10 @@ use PDO;
  *   POST   /cpt                   store a private CPT (GEF or CSV text)
  *   GET    /cpt/{privateId}       one of your private CPTs
  *   DELETE /cpt/{privateId}       delete one of your private CPTs
+ *   GET    /borehole/{dovId}, /interpretation/{dovId}   a DOV borehole or
+ *                                 interpretation, kept like a DOV CPT (same
+ *                                 query options, /revisions)
+ *   GET    /borehole?near=lat,lon&radius=m   library boreholes around a point
  * Every request but a CORS preflight needs X-Api-Key.
  */
 final class App
@@ -36,9 +41,11 @@ final class App
     private Cors $cors;
     private ApiKeys $keys;
     private RateLimiter $limiter;
-    private CptRepository $cpts;
     private PrivateCptRepository $privateCpts;
-    private CptService $service;
+    /** @var array<string, CptRepository> by DovKind value */
+    private array $stores = [];
+    /** @var array<string, CptService> by DovKind value */
+    private array $services = [];
 
     public function __construct(
         private Config $config,
@@ -50,7 +57,6 @@ final class App
         $this->cors = new Cors((array)$config->get('api.allowed_origins'));
         $this->keys = new ApiKeys($pdo, (string)$config->get('api.key_pepper'), $clock);
         $this->limiter = new RateLimiter($pdo, $clock);
-        $this->cpts = new CptRepository($pdo);
         $this->privateCpts = new PrivateCptRepository($pdo);
         $dov = new DovClient(
             $transport,
@@ -59,7 +65,10 @@ final class App
             $config->int('dov.max_bytes'),
             (string)$config->get('dov.user_agent'),
         );
-        $this->service = new CptService($pdo, $this->cpts, $dov, $this->limiter, $clock, $config);
+        foreach (DovKind::cases() as $kind) {
+            $this->stores[$kind->value] = new CptRepository($pdo, $kind);
+            $this->services[$kind->value] = new CptService($pdo, $this->stores[$kind->value], $dov, $this->limiter, $clock, $config);
+        }
     }
 
     /** Entry point for public/index.php. */
@@ -183,15 +192,19 @@ final class App
             $this->allow($method, ['GET']);
             return $this->status($user);
         }
-        if ($segments[0] !== 'cpt') {
+        $kind = DovKind::fromSegment($segments[0]);
+        if ($kind === null) {
             throw new HttpError(404, 'not_found', 'Unknown endpoint.');
+        }
+        if ($kind !== DovKind::Cpt) {
+            return $this->routeDataset($kind, $segments, $request, $user);
         }
         if (count($segments) === 1) {
             if ($method === 'POST') {
                 return $this->createPrivate($request, $user);
             }
             $this->allow($method, ['GET', 'POST']);
-            return $this->near($request, $user);
+            return $this->near(DovKind::Cpt, $request, $user);
         }
 
         $id = $segments[1];
@@ -202,7 +215,7 @@ final class App
         }
         if (count($segments) === 3 && $segments[2] === 'revisions' && $isDov) {
             $this->allow($method, ['GET']);
-            return $this->revisions($id);
+            return $this->revisions(DovKind::Cpt, $id);
         }
         if (count($segments) !== 2) {
             throw new HttpError(404, 'not_found', 'Unknown endpoint.');
@@ -215,7 +228,33 @@ final class App
             return $this->getPrivate($id, $user);
         }
         $this->allow($method, ['GET']);
-        return $this->getDov($id, $request, $user);
+        return $this->getDov(DovKind::Cpt, $id, $request, $user);
+    }
+
+    /** /borehole and /interpretation: DOV objects only (no private ones). */
+    private function routeDataset(DovKind $kind, array $segments, Request $request, User $user): Response
+    {
+        $method = $request->method;
+        if (count($segments) === 1) {
+            if ($kind !== DovKind::Borehole) {
+                throw new HttpError(404, 'not_found', 'Unknown endpoint.');
+            }
+            $this->allow($method, ['GET']);
+            return $this->near($kind, $request, $user);
+        }
+        $id = $segments[1];
+        if (!DovId::isValid($id)) {
+            throw new HttpError(400, 'invalid_id', "Not a DOV {$kind->label()} id (NNNN-NNNNNN).");
+        }
+        if (count($segments) === 3 && $segments[2] === 'revisions') {
+            $this->allow($method, ['GET']);
+            return $this->revisions($kind, $id);
+        }
+        if (count($segments) !== 2) {
+            throw new HttpError(404, 'not_found', 'Unknown endpoint.');
+        }
+        $this->allow($method, ['GET']);
+        return $this->getDov($kind, $id, $request, $user);
     }
 
     private function allow(string $method, array $methods): void
@@ -233,14 +272,15 @@ final class App
             'version' => CPT_LIBRARY_VERSION,
             'user' => $user->name,
             'canWrite' => $user->canWrite,
+            'datasets' => array_map(static fn(DovKind $kind): string => $kind->value, DovKind::cases()),
             'licence' => $this->licence(null, null),
         ]);
     }
 
-    private function getDov(string $dovId, Request $request, User $user): Response
+    private function getDov(DovKind $kind, string $dovId, Request $request, User $user): Response
     {
         $refresh = in_array($request->query('refresh'), ['1', 'true'], true);
-        $result = $this->service->get($dovId, $user, $refresh, $request->query('revision'));
+        $result = $this->services[$kind->value]->get($dovId, $user, $refresh, $request->query('revision'));
         $record = $result['record'];
         $revision = $result['revision'];
         $xml = (string)$revision['xml'];
@@ -256,11 +296,12 @@ final class App
         $utf8 = mb_check_encoding($xml, 'UTF-8');
         return Response::json(200, [
             'kind' => 'dov',
+            'type' => $kind->value,
             'private' => false,
             'dovId' => $dovId,
             'name' => $record['name'],
-            'sourceUrl' => DovId::xmlUrl($dovId),
-            'recordUrl' => DovId::recordUrl($dovId),
+            'sourceUrl' => DovId::xmlUrl($dovId, $kind),
+            'recordUrl' => DovId::recordUrl($dovId, $kind),
             'retrievedAt' => Clock::iso($revision['retrieved_at']),
             'lastCheckedAt' => Clock::iso($revision['is_current'] ? $record['last_checked_at'] : $revision['last_seen_at']),
             'sha256' => $revision['sha256'],
@@ -272,20 +313,21 @@ final class App
             'change' => $result['change'],
             'warning' => $result['warning'],
             'position' => self::position($record),
-            'licence' => $this->licence($dovId, $revision['is_current'] ? $record['last_checked_at'] : $revision['last_seen_at']),
+            'licence' => $this->licence($dovId, $revision['is_current'] ? $record['last_checked_at'] : $revision['last_seen_at'], $kind),
             'xmlEncoding' => $utf8 ? 'utf-8' : 'base64',
             'xml' => $utf8 ? $xml : base64_encode($xml),
         ], $headers);
     }
 
-    private function revisions(string $dovId): Response
+    private function revisions(DovKind $kind, string $dovId): Response
     {
-        $rows = $this->cpts->revisions($dovId);
+        $rows = $this->stores[$kind->value]->revisions($dovId);
         if ($rows === []) {
-            throw new HttpError(404, 'not_found', 'The library has no copy of this CPT.');
+            throw new HttpError(404, 'not_found', "The library has no copy of this {$kind->label()}.");
         }
         return Response::json(200, [
             'kind' => 'dov',
+            'type' => $kind->value,
             'dovId' => $dovId,
             'revisions' => array_map(static fn(array $row): array => [
                 'revision' => (int)$row['revision_no'],
@@ -295,11 +337,11 @@ final class App
                 'lastSeenAt' => Clock::iso($row['last_seen_at']),
                 'current' => (bool)$row['is_current'],
             ], $rows),
-            'licence' => $this->licence($dovId, null),
+            'licence' => $this->licence($dovId, null, $kind),
         ]);
     }
 
-    private function near(Request $request, User $user): Response
+    private function near(DovKind $kind, Request $request, User $user): Response
     {
         $near = $request->query('near');
         if ($near === null || preg_match('/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\z/', $near, $match) !== 1) {
@@ -335,14 +377,17 @@ final class App
             return array_slice($kept, 0, $max);
         };
 
-        $dov = $within($this->cpts->inBox($minLat, $maxLat, $minLon, $maxLon, $max * 5));
-        $private = $within($this->privateCpts->inBox($user->id, $minLat, $maxLat, $minLon, $maxLon, $max * 5));
+        $dov = $within($this->stores[$kind->value]->inBox($minLat, $maxLat, $minLon, $maxLon, $max * 5));
+        // Private uploads exist for CPTs only.
+        $private = $kind === DovKind::Cpt ? $within($this->privateCpts->inBox($user->id, $minLat, $maxLat, $minLon, $maxLon, $max * 5)) : [];
         return Response::json(200, [
+            'type' => $kind->value,
             'near' => ['latitude' => $latitude, 'longitude' => $longitude],
             'radius' => $radius,
             'source' => 'library',
             'dov' => array_map(fn(array $row): array => [
                 'kind' => 'dov',
+                'type' => $kind->value,
                 'private' => false,
                 'dovId' => $row['dov_id'],
                 'name' => $row['name'],
@@ -351,7 +396,7 @@ final class App
                 'sha256' => $row['sha256'],
                 'retrievedAt' => Clock::iso($row['retrieved_at']),
                 'lastCheckedAt' => Clock::iso($row['last_checked_at']),
-                'recordUrl' => DovId::recordUrl($row['dov_id']),
+                'recordUrl' => DovId::recordUrl($row['dov_id'], $kind),
             ], $dov),
             'private' => array_map(fn(array $row): array => $this->privateSummary($row) + ['distance' => $row['distance']], $private),
             'licence' => $this->licence(null, null),
@@ -419,8 +464,8 @@ final class App
         ];
     }
 
-    /** The DOV licence and, for one CPT, its attribution line. */
-    private function licence(?string $dovId, ?string $consultedAt): array
+    /** The DOV licence and, for one object, its attribution line. */
+    private function licence(?string $dovId, ?string $consultedAt, DovKind $kind = DovKind::Cpt): array
     {
         $licence = [
             'source' => 'Databank Ondergrond Vlaanderen (DOV)',
@@ -429,10 +474,10 @@ final class App
         ];
         if ($dovId !== null) {
             $date = $consultedAt === null ? $this->clock->now()->format('Y-m-d') : substr((string)Clock::iso($consultedAt), 0, 10);
-            $licence['attribution'] = strtr((string)$this->config->get('licence.attribution'), [
+            $licence['attribution'] = strtr((string)$this->config->get('licence.' . $kind->attributionKey()), [
                 '{id}' => $dovId,
                 '{date}' => $date,
-                '{recordUrl}' => DovId::recordUrl($dovId),
+                '{recordUrl}' => DovId::recordUrl($dovId, $kind),
             ]);
         }
         return $licence;

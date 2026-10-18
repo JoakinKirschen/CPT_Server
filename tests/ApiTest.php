@@ -3,9 +3,12 @@
 
 declare(strict_types=1);
 
+use CptLibrary\Dov\DovKind;
 use CptLibrary\Dov\TransportResponse;
 
 const CPT = '2002-009953';
+const BOREHOLE = '2016-122561';
+const INTERPRETATION = '2016-180001';
 
 return [
     // ---- authentication -------------------------------------------------
@@ -369,6 +372,173 @@ return [
         same(400, $t->get('/cpt', $alice, ['near' => '91,4'])->status);
         same(400, $t->get('/cpt', $alice, ['near' => "{$lat},{$lon}", 'radius' => '999999'])->status);
         same(400, $t->get('/cpt', $alice, ['near' => "{$lat},{$lon}", 'radius' => '-5'])->status);
+    },
+
+    // ---- DOV boreholes and interpretations ------------------------------
+
+    'the connection test lists the datasets' => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        same(['cpt', 'borehole', 'interpretation'], $t->get('/', $key)->data()['datasets']);
+    },
+
+    'a missing borehole is fetched from DOV, stored and returned with metadata' => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        $xml = borehole_xml();
+        $t->dov->default = FakeTransport::xml($xml);
+        same(401, $t->get('/borehole/' . BOREHOLE, null)->status, 'the same key is needed');
+        same([], $t->dov->urls);
+        $response = $t->get('/borehole/' . BOREHOLE, $key);
+        same(200, $response->status, $response->body);
+        $data = $response->data();
+        same('dov', $data['kind']);
+        same('borehole', $data['type']);
+        same(BOREHOLE, $data['dovId']);
+        same($xml, $data['xml'], 'the original XML, unchanged');
+        same(hash('sha256', $xml), $data['sha256']);
+        same('https://www.dov.vlaanderen.be/data/boring/' . BOREHOLE . '.xml', $data['sourceUrl']);
+        same('https://www.dov.vlaanderen.be/data/boring/' . BOREHOLE, $data['recordUrl']);
+        same('miss', $data['cache']);
+        same('kb00d000w-B1', $data['name']);
+        check($data['position'] !== null && abs($data['position']['lambert72']['x'] - 152000) < 0.01, 'position from the XML');
+        check(str_contains($data['licence']['attribution'], 'boring ' . BOREHOLE . ', geraadpleegd op 2026-10-17'), $data['licence']['attribution']);
+        same('Modellicentie Gratis Hergebruik v1.0', $data['licence']['name']);
+        same(dov_urls(BOREHOLE, DovKind::Borehole), $t->dov->urls);
+        same(hash('sha256', $xml), $response->header('X-Cpt-Sha256'));
+
+        same('hit', $t->get('/borehole/' . BOREHOLE, $key)->data()['cache']);
+        same(1, $t->dov->fetches(DovKind::Borehole), 'served from the library, DOV not asked again');
+        same($xml, $t->get('/borehole/' . BOREHOLE, $key, ['format' => 'xml'])->body);
+        same(1, (int)$t->pdo->query('SELECT COUNT(*) FROM borehole_records')->fetchColumn());
+        same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM cpt_records')->fetchColumn(), 'not stored as a CPT');
+    },
+
+    'an interpretation is fetched from its own DOV path and stored apart' => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        $xml = interpretation_xml();
+        $t->dov->default = FakeTransport::xml($xml);
+        $data = $t->get('/interpretation/' . INTERPRETATION, $key)->data();
+        same('interpretation', $data['type']);
+        same($xml, $data['xml']);
+        same(null, $data['name']);
+        same('https://www.dov.vlaanderen.be/data/interpretatie/' . INTERPRETATION . '.xml', $data['sourceUrl']);
+        check(str_contains($data['licence']['attribution'], 'interpretatie ' . INTERPRETATION), $data['licence']['attribution']);
+        same(dov_urls(INTERPRETATION, DovKind::Interpretation), $t->dov->urls);
+        same(1, (int)$t->pdo->query('SELECT COUNT(*) FROM interpretation_records')->fetchColumn());
+        same('hit', $t->get('/interpretation/' . INTERPRETATION, $key)->data()['cache']);
+    },
+
+    'the same id is a different object in each dataset' => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        $t->dov->default = FakeTransport::objects();
+        $cpt = $t->get('/cpt/' . BOREHOLE, $key)->data();
+        $borehole = $t->get('/borehole/' . BOREHOLE, $key)->data();
+        same('miss', $borehole['cache'], 'a stored CPT with this id does not answer for the borehole');
+        check($cpt['sha256'] !== $borehole['sha256']);
+        same(1, $t->dov->fetches(DovKind::Cpt));
+        same(1, $t->dov->fetches(DovKind::Borehole));
+
+        // A miss is remembered per dataset.
+        $t->dov->default = new TransportResponse(404, 'nope', 'text/html');
+        same(404, $t->get('/interpretation/' . CPT, $key)->status);
+        same(404, $t->get('/interpretation/' . CPT, $key)->status);
+        same(1, $t->dov->fetches(DovKind::Interpretation), 'the second request did not reach DOV');
+        $t->dov->default = FakeTransport::objects();
+        same(200, $t->get('/borehole/' . CPT, $key)->status, 'the interpretation miss does not block the borehole');
+        same('kind', (string)$t->pdo->query("SHOW COLUMNS FROM dov_fetches LIKE 'kind'")->fetchColumn());
+        same(['borehole', 'cpt', 'interpretation'], $t->pdo->query('SELECT DISTINCT kind FROM dov_fetches ORDER BY kind')->fetchAll(PDO::FETCH_COLUMN));
+    },
+
+    'DOV answers that are not this borehole or interpretation are refused' => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        $t->dov->default = FakeTransport::xml(borehole_xml(0, '1999-000111'));
+        $other = $t->get('/borehole/' . BOREHOLE, $key);
+        same(502, $other->status);
+        same('upstream_invalid', $other->data()['error']);
+        same('DOV did not return borehole XML.', $other->data()['message']);
+        $t->dov->default = FakeTransport::xml(sample_xml(0, 152000.0, 212000.0, INTERPRETATION));
+        same('upstream_invalid', $t->get('/interpretation/' . INTERPRETATION, $key)->data()['error'], 'a CPT is not an interpretation');
+        $t->dov->default = FakeTransport::xml(fixture('sondering-empty.xml'));
+        $missing = $t->get('/borehole/2016-000002', $key);
+        same(404, $missing->status);
+        same('DOV has no borehole with this id.', $missing->data()['message']);
+        $t->dov->default = FakeTransport::redirect('https://evil.example/2016-000003.xml');
+        same('upstream_redirect', $t->get('/borehole/2016-000003', $key)->data()['error']);
+        same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM borehole_records')->fetchColumn(), 'nothing stored');
+        same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM interpretation_records')->fetchColumn());
+    },
+
+    'borehole refresh keeps every distinct XML as a revision' => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        $a = borehole_xml(0);
+        $b = borehole_xml(1);
+        $t->dov->default = FakeTransport::xml($a);
+        $t->get('/borehole/' . BOREHOLE, $key);
+        $t->clock->advance(2 * 86400);
+        $t->dov->default = FakeTransport::xml($b);
+        $changed = $t->get('/borehole/' . BOREHOLE, $key, ['refresh' => '1'])->data();
+        same('changed', $changed['change']);
+        same(2, $changed['revisionCount']);
+        same($a, $t->get('/borehole/' . BOREHOLE, $key, ['revision' => hash('sha256', $a)])->data()['xml']);
+        $list = $t->get('/borehole/' . BOREHOLE . '/revisions', $key)->data();
+        same('borehole', $list['type']);
+        same([2, 1], array_column($list['revisions'], 'revision'));
+        same(404, $t->get('/interpretation/' . BOREHOLE . '/revisions', $key)->status, 'no interpretation with this id');
+    },
+
+    'borehole and interpretation paths are validated' => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        $t->dov->default = FakeTransport::objects();
+        foreach (['/borehole/abc', '/borehole/2016-12256', '/borehole/p-0123456789abcdef', '/interpretation/2016-180001.xml'] as $path) {
+            same(400, $t->get($path, $key)->status, $path);
+            same('invalid_id', $t->get($path, $key)->data()['error'], $path);
+        }
+        same(404, $t->get('/interpretation', $key, ['near' => '51,4'])->status, 'no near search for interpretations');
+        same(404, $t->get('/borehole/' . BOREHOLE . '/x', $key)->status);
+        same(404, $t->get('/boring/' . BOREHOLE, $key)->status, "DOV's path is not the API's");
+        same(405, $t->request('POST', '/borehole', [], ['X-Api-Key' => $key, 'Content-Type' => 'application/json'], '{}')->status, 'no private boreholes');
+        same(405, $t->request('DELETE', '/borehole/' . BOREHOLE, [], ['X-Api-Key' => $key])->status);
+        same([], $t->dov->urls, 'nothing reached DOV');
+    },
+
+    'DOV budgets cover every dataset' => function (): void {
+        $t = new TestApp(['rate_limit' => ['dov_fetches_per_user_per_hour' => 2, 'dov_fetches_global_per_minute' => 100]]);
+        $key = $t->keys->create('alice');
+        $t->dov->default = FakeTransport::objects();
+        same(200, $t->get('/cpt/2002-000001', $key)->status);
+        same(200, $t->get('/borehole/2016-000001', $key)->status);
+        $limited = $t->get('/interpretation/2016-000001', $key);
+        same(429, $limited->status);
+        same('dov_rate_limited', $limited->data()['error']);
+        same('Too many new interpretations requested from DOV; try again later.', $limited->data()['message']);
+        same(200, $t->get('/borehole/2016-000001', $key)->status, 'stored boreholes are still served');
+    },
+
+    'near lists library boreholes within the radius' => function (): void {
+        $t = new TestApp();
+        $key = $t->keys->create('alice');
+        $t->dov->queue = [
+            FakeTransport::xml(borehole_xml(0, '2016-000001', 152000, 212000)),
+            FakeTransport::xml(borehole_xml(0, '2016-000002', 160000, 212000)),
+            FakeTransport::xml(sample_xml(0, 152100, 212000, '2002-000001')),
+        ];
+        $t->get('/borehole/2016-000001', $key);
+        $t->get('/borehole/2016-000002', $key);
+        $t->get('/cpt/2002-000001', $key);
+        [$lat, $lon] = CptLibrary\Geo\Lambert72::toWgs84(152000, 212000);
+        $result = $t->get('/borehole', $key, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data();
+        same('borehole', $result['type']);
+        same(['2016-000001'], array_column($result['dov'], 'dovId'), 'the far one and the CPT left out');
+        same('https://www.dov.vlaanderen.be/data/boring/2016-000001', $result['dov'][0]['recordUrl']);
+        same([], $result['private']);
+        same(['2002-000001'], array_column($t->get('/cpt', $key, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data()['dov'], 'dovId'), 'and no borehole among the CPTs');
+        same(400, $t->get('/borehole', $key, ['near' => 'abc'])->status);
     },
 
     // ---- errors and logs ------------------------------------------------

@@ -105,8 +105,9 @@ php bin/migrate.php
 ```
 
 Without SSH, open **phpMyAdmin**, select `USER_cptlib`, go to the *SQL* tab,
-and paste the contents of `migrations/001_initial.sql`. The file records its
-own version, so `bin/migrate.php` will not apply it twice later.
+and paste the contents of `migrations/001_initial.sql`, then
+`migrations/002_boreholes.sql`, in that order. Each file records its own
+version, so `bin/migrate.php` will not apply it twice later.
 
 ## 6. Web folder
 
@@ -154,6 +155,23 @@ CPTs have no position. If that count is not 0, the coordinates in the DOV
 XML sit somewhere other than expected (the server reads the GML
 `ligging/Point/pos`). Send one XML so `src/Dov/CptXml.php` can be adjusted,
 then run `php bin/reindex.php` again.
+
+Boreholes and their lithological descriptions work the same way. Take a
+borehole and its description from Structural Canvas's Geology tab (*Open
+in DOV* shows `/data/boring/<id>`; the description's id is in its
+*Download* link, `/data/interpretatie/<id>.xml`):
+
+```sh
+curl -s https://nightdust.eu/cpt-api/borehole/BOREHOLE_ID -H "X-Api-Key: $KEY" | head -c 600
+curl -s https://nightdust.eu/cpt-api/interpretation/INTERPRETATION_ID -H "X-Api-Key: $KEY" | head -c 600
+```
+
+Their DOV XML shape and DOV's redirect for them were not seen from the host
+yet (only the CPT's were, in the probe). If DOV redirects elsewhere the
+answer is `upstream_redirect`; if the XML is not what the server expects it
+is `upstream_invalid`. Nothing is stored then. Send the answer of
+`curl -s -i https://www.dov.vlaanderen.be/data/boring/BOREHOLE_ID.xml`
+so `src/Dov/DovId.php` or `src/Dov/BoreholeXml.php` can be adjusted.
 
 ## 9. Cron jobs
 

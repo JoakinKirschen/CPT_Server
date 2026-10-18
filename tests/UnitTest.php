@@ -3,7 +3,9 @@
 
 declare(strict_types=1);
 
+use CptLibrary\Dov\BoreholeXml;
 use CptLibrary\Dov\CptXml;
+use CptLibrary\Dov\DovKind;
 use CptLibrary\Dov\FetchResult;
 use CptLibrary\Geo\Distance;
 use CptLibrary\Geo\Lambert72;
@@ -171,5 +173,37 @@ return [
         foreach ($statements as $statement) {
             check(!str_contains($statement, ';' . "\n"), 'one statement each');
         }
+    },
+
+    'borehole and interpretation answers are told apart' => function (): void {
+        $b = DovKind::Borehole;
+        $i = DovKind::Interpretation;
+        same(FetchResult::OK, BoreholeXml::classify(borehole_xml(), '2016-122561', $b));
+        same(FetchResult::NOT_FOUND, BoreholeXml::classify(fixture('sondering-empty.xml'), '2016-122561', $b), 'empty dov-schema');
+        same(FetchResult::INVALID, BoreholeXml::classify(borehole_xml(0, '1999-000111'), '2016-122561', $b), 'another id');
+        same(FetchResult::INVALID, BoreholeXml::classify(sample_xml(0, 152000.0, 212000.0, '2016-122561'), '2016-122561', $b), 'a CPT is not a borehole');
+        same(FetchResult::INVALID, BoreholeXml::classify(interpretation_xml(0, '2016-122561'), '2016-122561', $b), "an interpretation's <boring> link is not a borehole");
+        same(FetchResult::INVALID, BoreholeXml::classify('<html><body>x</body></html>', '2016-122561', $b));
+        same(FetchResult::INVALID, BoreholeXml::classify('not xml', '2016-122561', $b));
+        $noIds = (string)preg_replace('#<dataidentifier>.*?</dataidentifier>#s', '', borehole_xml());
+        same(FetchResult::OK, BoreholeXml::classify($noIds, '2016-122561', $b), 'no identifiers: nothing to contradict');
+
+        same(FetchResult::OK, BoreholeXml::classify(interpretation_xml(), '2016-180001', $i));
+        same(FetchResult::OK, BoreholeXml::classify(interpretation_xml(0, '2016-180001', '1999-000111'), '2016-180001', $i), 'the borehole link is not its own id');
+        same(FetchResult::INVALID, BoreholeXml::classify(interpretation_xml(0, '1999-000111'), '2016-180001', $i), 'another id');
+        same(FetchResult::NOT_FOUND, BoreholeXml::classify(fixture('sondering-empty.xml'), '2016-180001', $i));
+        same(FetchResult::INVALID, BoreholeXml::classify(borehole_xml(0, '2016-180001'), '2016-180001', $i), 'a borehole is not an interpretation');
+        same(FetchResult::INVALID, BoreholeXml::classify(sample_xml(0, 152000.0, 212000.0, '2016-180001'), '2016-180001', $i), 'a CPT is not an interpretation');
+        $unwrapped = (string)preg_replace('#</?interpretaties>#', '', interpretation_xml());
+        same(FetchResult::OK, BoreholeXml::classify($unwrapped, '2016-180001', $i), 'without the <interpretaties> wrapper');
+    },
+
+    'a borehole name and position are read from its XML' => function (): void {
+        $document = CptXml::load(borehole_xml(0, '2016-122561', 152000.0, 212000.0));
+        same('kb00d000w-B1', BoreholeXml::name($document, DovKind::Borehole));
+        $position = CptXml::position($document);
+        same(152000.0, $position['x']);
+        same(212000.0, $position['y']);
+        same(null, BoreholeXml::name(CptXml::load(interpretation_xml()), DovKind::Interpretation), 'interpretations have no name');
     },
 ];

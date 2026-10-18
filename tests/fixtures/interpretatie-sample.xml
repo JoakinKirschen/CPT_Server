@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Synthetic test file shaped like DOV's lithological description export (DOV schema, pydov); not real DOV data. -->
+<ns4:dov-schema xmlns:ns4="http://kern.schemas.dov.vlaanderen.be">
+    <interpretaties>
+        <lithologischebeschrijving>
+            <dataidentifier>
+                <permkey>{ID}</permkey>
+                <uri>https://www.dov.vlaanderen.be/data/interpretatie/{ID}</uri>
+            </dataidentifier>
+            <boring>https://www.dov.vlaanderen.be/data/boring/{BOREHOLE}</boring>
+            <laag><van>0</van><tot>1.2</tot><beschrijving>{DESCRIPTION}</beschrijving></laag>
+            <laag><van>1.2</van><tot>6</tot><beschrijving>Grijs fijn zand</beschrijving></laag>
+        </lithologischebeschrijving>
+    </interpretaties>
+</ns4:dov-schema>

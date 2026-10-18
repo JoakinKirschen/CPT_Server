@@ -6,11 +6,17 @@ namespace CptLibrary\Store;
 
 use CptLibrary\Clock;
 use CptLibrary\Database;
+use CptLibrary\Dov\BoreholeXml;
 use CptLibrary\Dov\CptXml;
+use CptLibrary\Dov\DovKind;
 use DateTimeImmutable;
 use PDO;
 
-/** DOV CPT records, their revisions and the DOV fetch log. */
+/**
+ * DOV records of one dataset (CPTs by default; boreholes and
+ * interpretations alike), their revisions and the DOV fetch log. The table
+ * names come from DovKind, never from input.
+ */
 final class CptRepository
 {
     public const STORED_NEW = 'new';             // first copy of this CPT
@@ -18,8 +24,18 @@ final class CptRepository
     public const STORED_CHANGED = 'changed';     // new XML: a new revision, the old one kept
     public const STORED_REVERTED = 'reverted';   // DOV returned an earlier revision again
 
-    public function __construct(private PDO $pdo)
+    private string $records;
+    private string $revisions;
+
+    public function __construct(private PDO $pdo, private DovKind $kind = DovKind::Cpt)
     {
+        $this->records = $kind->table() . '_records';
+        $this->revisions = $kind->table() . '_revisions';
+    }
+
+    public function kind(): DovKind
+    {
+        return $this->kind;
     }
 
     /** The record with its current revision (without the XML), or null. */
@@ -27,8 +43,8 @@ final class CptRepository
     {
         $statement = $this->pdo->prepare(
             'SELECT r.*, v.revision_no, v.sha256, v.byte_length, v.retrieved_at, v.last_seen_at,
-                    (SELECT COUNT(*) FROM cpt_revisions c WHERE c.record_id = r.id) AS revision_count
-             FROM cpt_records r JOIN cpt_revisions v ON v.id = r.current_revision_id
+                    (SELECT COUNT(*) FROM ' . $this->revisions . ' c WHERE c.record_id = r.id) AS revision_count
+             FROM ' . $this->records . ' r JOIN ' . $this->revisions . ' v ON v.id = r.current_revision_id
              WHERE r.dov_id = ?'
         );
         $statement->execute([$dovId]);
@@ -39,7 +55,7 @@ final class CptRepository
     public function revision(string $dovId, ?string $sha256 = null): ?array
     {
         $sql = 'SELECT v.*, r.dov_id, (r.current_revision_id = v.id) AS is_current
-                FROM cpt_revisions v JOIN cpt_records r ON r.id = v.record_id
+                FROM ' . $this->revisions . ' v JOIN ' . $this->records . ' r ON r.id = v.record_id
                 WHERE r.dov_id = ? AND ' . ($sha256 === null ? 'v.id = r.current_revision_id' : 'v.sha256 = ?');
         $statement = $this->pdo->prepare($sql);
         $statement->execute($sha256 === null ? [$dovId] : [$dovId, $sha256]);
@@ -57,7 +73,7 @@ final class CptRepository
     {
         $statement = $this->pdo->prepare(
             'SELECT v.revision_no, v.sha256, v.byte_length, v.retrieved_at, v.last_seen_at, (r.current_revision_id = v.id) AS is_current
-             FROM cpt_revisions v JOIN cpt_records r ON r.id = v.record_id
+             FROM ' . $this->revisions . ' v JOIN ' . $this->records . ' r ON r.id = v.record_id
              WHERE r.dov_id = ? ORDER BY v.revision_no DESC'
         );
         $statement->execute([$dovId]);
@@ -75,33 +91,33 @@ final class CptRepository
         $time = Clock::sql($now);
         $document = CptXml::load($xml);
         $position = $document ? CptXml::position($document) : null;
-        $name = $document ? CptXml::name($document) : null;
+        $name = $document ? $this->name($document) : null;
 
         return Database::transaction($this->pdo, function (PDO $pdo) use ($dovId, $xml, $sha, $time, $position, $name, $userId): string {
-            $statement = $pdo->prepare('SELECT id, current_revision_id FROM cpt_records WHERE dov_id = ? FOR UPDATE');
+            $statement = $pdo->prepare('SELECT id, current_revision_id FROM ' . $this->records . ' WHERE dov_id = ? FOR UPDATE');
             $statement->execute([$dovId]);
             $record = $statement->fetch();
             if (!$record) {
-                $pdo->prepare('INSERT INTO cpt_records (dov_id, first_retrieved_at, last_checked_at) VALUES (?, ?, ?)')
+                $pdo->prepare('INSERT INTO ' . $this->records . ' (dov_id, first_retrieved_at, last_checked_at) VALUES (?, ?, ?)')
                     ->execute([$dovId, $time, $time]);
                 $record = ['id' => (int)$pdo->lastInsertId(), 'current_revision_id' => null];
             }
             $recordId = (int)$record['id'];
 
-            $statement = $pdo->prepare('SELECT id FROM cpt_revisions WHERE record_id = ? AND sha256 = ?');
+            $statement = $pdo->prepare('SELECT id FROM ' . $this->revisions . ' WHERE record_id = ? AND sha256 = ?');
             $statement->execute([$recordId, $sha]);
             $existing = $statement->fetchColumn();
             if ($existing !== false) {
                 $revisionId = (int)$existing;
-                $pdo->prepare('UPDATE cpt_revisions SET last_seen_at = ? WHERE id = ?')->execute([$time, $revisionId]);
+                $pdo->prepare('UPDATE ' . $this->revisions . ' SET last_seen_at = ? WHERE id = ?')->execute([$time, $revisionId]);
                 $outcome = $revisionId === (int)$record['current_revision_id'] ? self::STORED_UNCHANGED : self::STORED_REVERTED;
             } else {
-                $statement = $pdo->prepare('SELECT COALESCE(MAX(revision_no), 0) + 1 FROM cpt_revisions WHERE record_id = ?');
+                $statement = $pdo->prepare('SELECT COALESCE(MAX(revision_no), 0) + 1 FROM ' . $this->revisions . ' WHERE record_id = ?');
                 $statement->execute([$recordId]);
                 $revisionNo = (int)$statement->fetchColumn();
                 [$encoding, $content] = Content::encode($xml);
                 $insert = $pdo->prepare(
-                    'INSERT INTO cpt_revisions (record_id, revision_no, sha256, byte_length, encoding, content, retrieved_at, last_seen_at, fetched_by)
+                    'INSERT INTO ' . $this->revisions . ' (record_id, revision_no, sha256, byte_length, encoding, content, retrieved_at, last_seen_at, fetched_by)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
                 );
                 $insert->bindValue(1, $recordId, PDO::PARAM_INT);
@@ -119,7 +135,7 @@ final class CptRepository
             }
 
             $pdo->prepare(
-                'UPDATE cpt_records SET current_revision_id = ?, last_checked_at = ?, name = ?, lambert_x = ?, lambert_y = ?, latitude = ?, longitude = ? WHERE id = ?'
+                'UPDATE ' . $this->records . ' SET current_revision_id = ?, last_checked_at = ?, name = ?, lambert_x = ?, lambert_y = ?, latitude = ?, longitude = ? WHERE id = ?'
             )->execute([
                 $revisionId, $time, $name,
                 $position['x'] ?? null, $position['y'] ?? null, $position['latitude'] ?? null, $position['longitude'] ?? null,
@@ -132,7 +148,7 @@ final class CptRepository
     /** Marks the stored copy as confirmed without a change (not used for fetch errors). */
     public function touch(string $dovId, DateTimeImmutable $now): void
     {
-        $this->pdo->prepare('UPDATE cpt_records SET last_checked_at = ? WHERE dov_id = ?')->execute([Clock::sql($now), $dovId]);
+        $this->pdo->prepare('UPDATE ' . $this->records . ' SET last_checked_at = ? WHERE dov_id = ?')->execute([Clock::sql($now), $dovId]);
     }
 
     /** @return list<array<string,mixed>> records inside the box, without XML */
@@ -140,7 +156,7 @@ final class CptRepository
     {
         $statement = $this->pdo->prepare(
             'SELECT r.dov_id, r.name, r.latitude, r.longitude, r.lambert_x, r.lambert_y, r.last_checked_at, v.sha256, v.retrieved_at
-             FROM cpt_records r JOIN cpt_revisions v ON v.id = r.current_revision_id
+             FROM ' . $this->records . ' r JOIN ' . $this->revisions . ' v ON v.id = r.current_revision_id
              WHERE r.latitude BETWEEN ? AND ? AND r.longitude BETWEEN ? AND ?
              LIMIT ' . max(1, $limit)
         );
@@ -151,32 +167,38 @@ final class CptRepository
     public function logFetch(string $dovId, ?int $userId, DateTimeImmutable $now, int $httpStatus, string $outcome, ?string $sha256, ?int $bytes, int $durationMs): void
     {
         $this->pdo->prepare(
-            'INSERT INTO dov_fetches (dov_id, user_id, fetched_at, http_status, outcome, sha256, byte_length, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-        )->execute([$dovId, $userId, Clock::sql($now), $httpStatus, $outcome, $sha256, $bytes, $durationMs]);
+            'INSERT INTO dov_fetches (kind, dov_id, user_id, fetched_at, http_status, outcome, sha256, byte_length, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )->execute([$this->kind->value, $dovId, $userId, Clock::sql($now), $httpStatus, $outcome, $sha256, $bytes, $durationMs]);
     }
 
     /**
-     * 'not_found' or 'invalid' when DOV's last answer for this id, within the
-     * last $seconds, was "no such CPT" or not CPT XML; otherwise null.
+     * 'not_found' or 'invalid' when DOV's last answer for this id in this
+     * dataset, within the last $seconds, was "no such object" or not its
+     * XML; otherwise null.
      */
     public function recentMiss(string $dovId, DateTimeImmutable $now, int $seconds): ?string
     {
-        $statement = $this->pdo->prepare('SELECT outcome FROM dov_fetches WHERE dov_id = ? AND fetched_at >= ? ORDER BY id DESC LIMIT 1');
-        $statement->execute([$dovId, Clock::sql($now->modify("-{$seconds} seconds"))]);
+        $statement = $this->pdo->prepare('SELECT outcome FROM dov_fetches WHERE kind = ? AND dov_id = ? AND fetched_at >= ? ORDER BY id DESC LIMIT 1');
+        $statement->execute([$this->kind->value, $dovId, Clock::sql($now->modify("-{$seconds} seconds"))]);
         $outcome = $statement->fetchColumn();
         return in_array($outcome, ['not_found', 'invalid'], true) ? $outcome : null;
+    }
+
+    private function name(\DOMDocument $document): ?string
+    {
+        return $this->kind === DovKind::Cpt ? CptXml::name($document) : BoreholeXml::name($document, $this->kind);
     }
 
     /** Re-reads position and name from each current revision (after a parser change). */
     public function reindex(): int
     {
-        $rows = $this->pdo->query('SELECT r.id, v.content, v.encoding FROM cpt_records r JOIN cpt_revisions v ON v.id = r.current_revision_id')->fetchAll();
-        $update = $this->pdo->prepare('UPDATE cpt_records SET name = ?, lambert_x = ?, lambert_y = ?, latitude = ?, longitude = ? WHERE id = ?');
+        $rows = $this->pdo->query('SELECT r.id, v.content, v.encoding FROM ' . $this->records . ' r JOIN ' . $this->revisions . ' v ON v.id = r.current_revision_id')->fetchAll();
+        $update = $this->pdo->prepare('UPDATE ' . $this->records . ' SET name = ?, lambert_x = ?, lambert_y = ?, latitude = ?, longitude = ? WHERE id = ?');
         foreach ($rows as $row) {
             $document = CptXml::load(Content::decode((string)$row['content'], (string)$row['encoding']));
             $position = $document ? CptXml::position($document) : null;
             $update->execute([
-                $document ? CptXml::name($document) : null,
+                $document ? $this->name($document) : null,
                 $position['x'] ?? null, $position['y'] ?? null, $position['latitude'] ?? null, $position['longitude'] ?? null,
                 $row['id'],
             ]);

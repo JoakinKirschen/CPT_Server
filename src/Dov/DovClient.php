@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace CptLibrary\Dov;
 
 /**
- * Fetches one CPT XML from DOV. The URL is always built here from a
- * validated id. DOV answers the XML URL with a redirect to its export URL
+ * Fetches one CPT, borehole or interpretation XML from DOV. The URL is
+ * always built here from a validated id and the dataset. DOV answers the XML URL with a redirect to its export URL
  * for the same id; that one hop is followed, and only when the Location is
  * exactly that URL. Any other redirect is reported, never followed.
  */
@@ -27,13 +27,13 @@ final class DovClient
     ) {
     }
 
-    public function fetch(string $dovId): FetchResult
+    public function fetch(string $dovId, DovKind $kind = DovKind::Cpt): FetchResult
     {
-        $url = DovId::xmlUrl($dovId);
-        $exportUrl = DovId::exportUrl($dovId);
+        $url = DovId::xmlUrl($dovId, $kind);
+        $exportUrl = DovId::exportUrl($dovId, $kind);
         $duration = 0;
         for ($hop = 0; $hop < 2; $hop++) {
-            if (!DovId::isAllowedFetchUrl($url)) {
+            if (!DovId::isAllowedFetchUrl($url, $kind)) {
                 // Unreachable while the URL builders are correct; kept as a second lock.
                 throw new \LogicException('Refusing to fetch a non-DOV URL.');
             }
@@ -65,7 +65,9 @@ final class DovClient
             return new FetchResult(FetchResult::UPSTREAM_ERROR, $response->status, '', $duration);
         }
         // DOV answers an unknown id with 200 and an empty <dov-schema>.
-        $outcome = CptXml::classify($response->body, $dovId);
+        $outcome = $kind === DovKind::Cpt
+            ? CptXml::classify($response->body, $dovId)
+            : BoreholeXml::classify($response->body, $dovId, $kind);
         if ($outcome !== FetchResult::OK) {
             return new FetchResult($outcome, $response->status, '', $duration);
         }

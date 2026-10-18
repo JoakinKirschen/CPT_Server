@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Synthetic test file shaped like DOV's borehole export (DOV schema, pydov); not real DOV data. -->
+<ns4:dov-schema xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:ns4="http://kern.schemas.dov.vlaanderen.be">
+    <boring>
+        <boornummer>kb00d000w-B1</boornummer>
+        <dataidentifier>
+            <permkey>{ID}</permkey>
+            <uri>https://www.dov.vlaanderen.be/data/boring/{ID}</uri>
+        </dataidentifier>
+        <ligging>
+            <gml:Point srsName="urn:ogc:def:crs:EPSG::31370"><gml:pos>{X} {Y}</gml:pos></gml:Point>
+            <alternatieve_crs>
+                <gml:Point srsName="urn:ogc:def:crs:EPSG::4326"><gml:pos>{LAT} {LON}</gml:pos></gml:Point>
+            </alternatieve_crs>
+        </ligging>
+        <mv_mtaw>12.40</mv_mtaw>
+        <diepte_tot_m>{DEPTH}</diepte_tot_m>
+        <details>
+            <boormethode><van>0</van><tot>{DEPTH}</tot><methode>spoelboring</methode></boormethode>
+        </details>
+    </boring>
+</ns4:dov-schema>
