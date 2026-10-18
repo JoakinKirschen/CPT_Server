@@ -16,7 +16,9 @@ attribution.
 It runs on ordinary shared hosting: PHP 8.3, MySQL/MariaDB, Apache or
 LiteSpeed with `.htaccess`, and cron. It needs no Composer packages, no
 long-running processes and no root access. See
-[docs/INSTALL-DirectAdmin.md](docs/INSTALL-DirectAdmin.md).
+[docs/INSTALL-DirectAdmin.md](docs/INSTALL-DirectAdmin.md), or
+[docs/INSTALL-without-SSH.md](docs/INSTALL-without-SSH.md) to install or
+update with only DirectAdmin's File Manager and cron.
 
 ## API
 
@@ -279,7 +281,7 @@ migrations/        SQL schema, applied in order by bin/migrate.php
 config/            config.example.php (the real config.php is not committed)
 tests/             php tests/run.php
 tools/probe.php    one-off host check (step 0), delete after use
-docs/              install guide
+docs/              install guides (with SSH, and without SSH)
 ```
 
 ## Tests

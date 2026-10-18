@@ -213,6 +213,9 @@ php tests/run.php        # optional, against the test database
 
 ## Without SSH (File Manager and cron only)
 
+The full step-by-step guide, including the update to 1.1.0 (boreholes), is
+[INSTALL-without-SSH.md](INSTALL-without-SSH.md). In short:
+
 Some hosts give SSH only with a key, or not at all. Everything above can be
 done with DirectAdmin's **Files** manager and **Cronjobs** page instead. A
 cron job can run any of the `bin/` scripts once.
