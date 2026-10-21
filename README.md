@@ -188,13 +188,22 @@ Content-Type: application/json
 
   `accuracyM` (1–20 000 m) overrides the default. `text` (at most 200
   characters) keeps the address or place name as given.
-- `origin` (1.3.0) says where the readings come from:
+- `origin` (1.3.0; `image-plot` and `ai-table` since 1.4.0) says where the
+  readings come from:
   - `file` (the default): a data file such as a GEF, a CSV or a
     spreadsheet;
   - `pdf-table`: a table of readings in a PDF report;
   - `pdf-plot`: digitised from a plot in a PDF report. These readings are
-    less exact than the test's own data, and every answer that names the
-    upload says so.
+    less exact than the test's own data;
+  - `image-plot`: traced from a plot in a picture (a scanned page or an
+    image file). Less exact than the test's own data, like `pdf-plot`;
+  - `ai-table`: read by an AI model from a table in a picture, read twice
+    and compared with the page by the uploader. Its values were written by
+    the AI, not taken from the test's data.
+
+  Every answer that names the upload says where its readings come from: the
+  `origin` field in the upload answer, in `GET /cpt/{id}`, in
+  `possibleDuplicates` and in the `near` search.
 - `testDate` is the date of the test (`YYYY-MM-DD`). It is optional, but
   the answer warns when it is missing because it helps to find duplicates.
 - The limit is 3 MB of text (kept under PHP's `post_max_size` of 8 MB,
@@ -405,7 +414,11 @@ errors, logs without keys, a backup and restore round trip, and boreholes
 and interpretations (their URLs, classification, storage apart from the
 CPTs, revisions, shared budgets and their own `near` search). Since 1.2.0
 they also cover keyless reads and their budgets, the storage cap, the
-quality check, visibility and groups, and the duplicate checks. Most of them
+quality check, visibility and groups, and the duplicate checks. Since 1.3.0
+they cover where an upload's readings come from, and since 1.4.0 the
+`image-plot` and `ai-table` origins (accepted, read back from the upload
+answer, `GET /cpt/{id}`, possible duplicates and the `near` search, and
+short enough for the database column). Most of them
 need an **empty test database whose name contains `test`**, because the
 tests drop all its tables. Configure it in `tests/config.test.php` (copy
 `tests/config.test.example.php`) or with the `CPT_TEST_DB_*` environment
