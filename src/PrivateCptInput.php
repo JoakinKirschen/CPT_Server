@@ -12,7 +12,9 @@ use CptLibrary\Http\HttpError;
  * ("private" | "group" | "library", default private), "location"
  * {"method", "accuracyM", "text"} and "testDate" (YYYY-MM-DD), and since
  * 1.3.0 "origin": where the readings come from ("file", the default,
- * "pdf-table" or "pdf-plot", digitised from a plot)}. The text
+ * "pdf-table" or "pdf-plot", digitised from a plot; since 1.4.0 also
+ * "image-plot", traced from a plot in a picture, or "ai-table", read by an
+ * AI model from a table in a picture)}. The text
  * is stored as sent; this makes sure it is plausible CPT text and not
  * something else (CptReadings then checks its readings). A group or library
  * upload needs a position with its method.
@@ -20,8 +22,14 @@ use CptLibrary\Http\HttpError;
 final class PrivateCptInput
 {
     public const VISIBILITIES = ['private', 'group', 'library'];
-    /** Where the readings come from (1.3.0): a data file, a table in a PDF, or digitised from a PDF plot. */
-    public const ORIGINS = ['file', 'pdf-table', 'pdf-plot'];
+    /**
+     * Where the readings come from (1.3.0): a data file, a table in a PDF, or
+     * digitised from a PDF plot; since 1.4.0 also traced from a plot in a
+     * picture, or read by an AI model from a table in a picture. Stored in
+     * data_origin, VARCHAR(10) ascii: keep every value ASCII and at most 10
+     * characters.
+     */
+    public const ORIGINS = ['file', 'pdf-table', 'pdf-plot', 'image-plot', 'ai-table'];
     /** How a position was obtained, and the accuracy assumed when none is given (m). */
     public const LOCATION_METHODS = [
         'survey' => 5,        // measured coordinates (GEF header, survey)
@@ -147,7 +155,8 @@ final class PrivateCptInput
         }
         $origin = $data['origin'] ?? 'file';
         if (!in_array($origin, self::ORIGINS, true)) {
-            throw self::invalid('"origin" must be "file", "pdf-table" or "pdf-plot".');
+            $quoted = array_map(static fn(string $origin): string => '"' . $origin . '"', self::ORIGINS);
+            throw self::invalid('"origin" must be ' . implode(', ', array_slice($quoted, 0, -1)) . ' or ' . end($quoted) . '.');
         }
         return new self($name, $format, $content, $latitude, $longitude, $visibility, $method, $accuracy, $text, $testDate, $origin);
     }

@@ -249,6 +249,34 @@ return [
         same(['file', 'pdf-plot'], $origins, 'near names the origin');
     },
 
+    // ---- uploads: origin from pictures (1.4.0) -----------------------------
+
+    'an upload traced from a picture or read by AI says so' => function (): void {
+        $t = new TestApp();
+        $alice = $t->keys->create('alice');
+        foreach (['image-plot' => 1, 'ai-table' => 2] as $origin => $variant) {
+            $response = upload($t, $alice, upload_gef(20, 2.0, $variant), ['origin' => $origin]);
+            same(201, $response->status, $response->body);
+            same($origin, $response->data()['origin'], 'the upload answer');
+            same($origin, $t->get('/cpt/' . $response->data()['id'], $alice)->data()['origin'], 'GET /cpt/{id}');
+        }
+        [$lat, $lon] = point();
+        $where = ['visibility' => 'library', 'latitude' => $lat, 'longitude' => $lon, 'location' => ['method' => 'survey'], 'testDate' => '2025-03-04'];
+        same(201, upload($t, $alice, upload_gef(20, 2.0, 3), ['origin' => 'image-plot'] + $where)->status);
+        same(201, upload($t, $alice, upload_gef(20, 2.0, 4), ['origin' => 'ai-table'] + $where)->status);
+        $last = upload($t, $alice, upload_gef(20, 2.0, 5), $where);
+        same(201, $last->status, $last->body);
+        $duplicates = array_column($last->data()['possibleDuplicates'], 'origin');
+        sort($duplicates);
+        same(['ai-table', 'image-plot'], $duplicates, 'possible duplicates name their origin');
+        $origins = array_column($t->get('/cpt', $alice, ['near' => "{$lat},{$lon}", 'radius' => '50'])->data()['uploads'], 'origin');
+        sort($origins);
+        same(['ai-table', 'file', 'image-plot'], $origins, 'near names the origin');
+        $refused = upload($t, $alice, upload_gef(20, 2.0, 6), ['origin' => 'scan']);
+        same(400, $refused->status, $refused->body);
+        same('"origin" must be "file", "pdf-table", "pdf-plot", "image-plot" or "ai-table".', $refused->data()['message']);
+    },
+
     // ---- the reader ------------------------------------------------------
 
     'the readings are read from GEF columns and CSV, in MPa' => function (): void {

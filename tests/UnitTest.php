@@ -160,6 +160,18 @@ return [
         same(413, throws(HttpError::class, fn() => PrivateCptInput::fromJson(json_encode(['name' => 'x', 'content' => $gef]), 10))->status);
     },
 
+    'every upload origin fits the data_origin column' => function (): void {
+        // migrations/004_upload_origin.sql: data_origin VARCHAR(10) CHARACTER SET ascii.
+        check(PrivateCptInput::ORIGINS !== [], 'there are origins');
+        foreach (PrivateCptInput::ORIGINS as $origin) {
+            check(preg_match('/^[\x20-\x7E]{1,10}\z/', $origin) === 1, "{$origin} must be ASCII and at most 10 characters");
+        }
+        $gef = "#GEFID= 1, 1, 0\n#EOH=\n0.2;1.5;!\n";
+        foreach (PrivateCptInput::ORIGINS as $origin) {
+            same($origin, PrivateCptInput::fromJson(json_encode(['name' => 'x', 'content' => $gef, 'origin' => $origin]), 10000)->origin);
+        }
+    },
+
     'stored content round-trips byte for byte' => function (): void {
         foreach ([sample_xml(), "short", random_bytes(3000), str_repeat("<a>1</a>\n", 5000)] as $text) {
             [$encoding, $stored] = Content::encode($text);
