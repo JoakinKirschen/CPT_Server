@@ -12,7 +12,7 @@ namespace CptLibrary\Http;
  */
 final class Cors
 {
-    public const ALLOW_METHODS = 'GET, POST, DELETE, OPTIONS';
+    public const ALLOW_METHODS = 'GET, POST, PUT, DELETE, OPTIONS';
     public const ALLOW_HEADERS = 'X-Api-Key, Content-Type';
     public const EXPOSE_HEADERS = 'X-Cpt-Sha256, X-Cpt-Retrieved-At, X-Cpt-Dov-Id, X-Cpt-Cache, Retry-After';
 

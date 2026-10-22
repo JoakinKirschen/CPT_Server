@@ -23,6 +23,7 @@ return [
         same('null', $response->header('Access-Control-Allow-Origin'));
         check(str_contains((string)$response->header('Access-Control-Allow-Headers'), 'X-Api-Key'));
         check(str_contains((string)$response->header('Access-Control-Allow-Methods'), 'POST'));
+        check(str_contains((string)$response->header('Access-Control-Allow-Methods'), 'PUT'), 'PUT marks a favourite (1.5.0)');
         same(null, $response->header('Access-Control-Allow-Credentials'), 'no credentials (cookies) mode');
         same('Origin', $cors->headers('null')['Vary']);
     },

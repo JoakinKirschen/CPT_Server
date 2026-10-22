@@ -16,6 +16,7 @@ use CptLibrary\Http\Cors;
 use CptLibrary\Http\HttpError;
 use CptLibrary\Http\Request;
 use CptLibrary\Http\Response;
+use CptLibrary\Store\BoreholeFavourites;
 use CptLibrary\Store\CptRepository;
 use CptLibrary\Store\PrivateCptRepository;
 use PDO;
@@ -35,6 +36,10 @@ use PDO;
  *                                 interpretation, kept like a DOV CPT (same
  *                                 query options, /revisions)
  *   GET    /borehole?near=lat,lon&radius=m   library boreholes around a point
+ *   GET    /borehole/favourites?ids=a,b,...  which of these boreholes are
+ *                                 favourites, who marked them and when (1.5.0)
+ *   PUT    /borehole/{dovId}/favourite   mark a borehole as a favourite
+ *   DELETE /borehole/{dovId}/favourite   clear the mark (a key that may write)
  * Since 1.2.0 DOV objects and "near" are public: no key needed (limited
  * per IP address; refresh and revisions need a key). Uploads need
  * X-Api-Key, as does everything else. A key that is sent but not valid is
@@ -49,6 +54,7 @@ final class App
     private const DUPLICATE_MIN_RADIUS_M = 25;
 
     private PrivateCptRepository $privateCpts;
+    private BoreholeFavourites $favourites;
     private StorageGuard $storage;
     /** @var array<string, CptRepository> by DovKind value */
     private array $stores = [];
@@ -66,6 +72,7 @@ final class App
         $this->keys = new ApiKeys($pdo, (string)$config->get('api.key_pepper'), $clock);
         $this->limiter = new RateLimiter($pdo, $clock);
         $this->privateCpts = new PrivateCptRepository($pdo);
+        $this->favourites = new BoreholeFavourites($pdo);
         $this->storage = new StorageGuard($pdo, (float)$config->get('storage.max_database_mb'));
         $dov = new DovClient(
             $transport,
@@ -270,8 +277,16 @@ final class App
             return $this->near($kind, $request, $user);
         }
         $id = $segments[1];
+        if ($kind === DovKind::Borehole && $id === 'favourites' && count($segments) === 2) {
+            $this->allow($method, ['GET']);
+            return $this->favouriteList($request);
+        }
         if (!DovId::isValid($id)) {
             throw new HttpError(400, 'invalid_id', "Not a DOV {$kind->label()} id (NNNN-NNNNNN).");
+        }
+        if ($kind === DovKind::Borehole && count($segments) === 3 && $segments[2] === 'favourite') {
+            $this->allow($method, ['PUT', 'DELETE']);
+            return $this->markFavourite($id, $method === 'PUT', self::requireKey($user, 'to mark favourites'));
         }
         if (count($segments) === 3 && $segments[2] === 'revisions') {
             $this->allow($method, ['GET']);
@@ -283,6 +298,37 @@ final class App
         }
         $this->allow($method, ['GET']);
         return $this->getDov($kind, $id, $request, $user);
+    }
+
+    /** GET /borehole/favourites?ids=a,b — the marks of these boreholes (no key needed). */
+    private function favouriteList(Request $request): Response
+    {
+        $ids = array_values(array_filter(array_map('trim', explode(',', (string)$request->query('ids'))), static fn(string $id): bool => $id !== ''));
+        if ($ids === []) {
+            throw new HttpError(400, 'invalid_ids', 'ids must list DOV borehole ids (NNNN-NNNNNN), separated by commas.');
+        }
+        if (count($ids) > BoreholeFavourites::MAX_IDS) {
+            throw new HttpError(400, 'invalid_ids', 'At most ' . BoreholeFavourites::MAX_IDS . ' ids at a time.');
+        }
+        foreach ($ids as $id) {
+            if (!DovId::isValid($id)) {
+                throw new HttpError(400, 'invalid_ids', 'ids must list DOV borehole ids (NNNN-NNNNNN), separated by commas.');
+            }
+        }
+        return Response::json(200, ['type' => DovKind::Borehole->value, 'favourites' => $this->favourites->find($ids)]);
+    }
+
+    /** PUT or DELETE /borehole/{dovId}/favourite: one shared mark per borehole. */
+    private function markFavourite(string $dovId, bool $set, User $user): Response
+    {
+        if (!$user->canWrite) {
+            throw new HttpError(403, 'forbidden', 'This key may not mark favourites.');
+        }
+        if ($set) {
+            return Response::json(200, ['dovId' => $dovId, 'favourite' => $this->favourites->set($dovId, $user, $this->clock->now())]);
+        }
+        $this->favourites->clear($dovId);
+        return Response::json(200, ['dovId' => $dovId, 'favourite' => null]);
     }
 
     private function allow(string $method, array $methods): void
@@ -345,6 +391,7 @@ final class App
             'warning' => $result['warning'],
             'position' => self::position($record),
             'licence' => $this->licence($dovId, $revision['is_current'] ? $record['last_checked_at'] : $revision['last_seen_at'], $kind),
+        ] + ($kind === DovKind::Borehole ? ['favourite' => $this->favourites->find([$dovId])[$dovId] ?? null] : []) + [
             'xmlEncoding' => $utf8 ? 'utf-8' : 'base64',
             'xml' => $utf8 ? $xml : base64_encode($xml),
         ], $headers);
@@ -411,12 +458,13 @@ final class App
         $dov = $within($this->stores[$kind->value]->inBox($minLat, $maxLat, $minLon, $maxLon, $max * 5));
         // Uploads exist for CPTs only, and only for a key that may see them.
         $uploads = $kind === DovKind::Cpt ? $within($this->privateCpts->inBox($user, $minLat, $maxLat, $minLon, $maxLon, $max * 5)) : [];
+        $favourites = $kind === DovKind::Borehole ? $this->favourites->find(array_column($dov, 'dov_id')) : [];
         return Response::json(200, [
             'type' => $kind->value,
             'near' => ['latitude' => $latitude, 'longitude' => $longitude],
             'radius' => $radius,
             'source' => 'library',
-            'dov' => array_map(fn(array $row): array => [
+            'dov' => array_map(fn(array $row): array => ($kind === DovKind::Borehole ? ['favourite' => $favourites[$row['dov_id']] ?? null] : []) + [
                 'kind' => 'dov',
                 'type' => $kind->value,
                 'private' => false,

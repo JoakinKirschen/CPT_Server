@@ -557,6 +557,60 @@ return [
         same(400, $t->get('/borehole', $key, ['near' => 'abc'])->status);
     },
 
+    'a favourite borehole is marked by a key that may write and seen by everyone' => function (): void {
+        $t = new TestApp();
+        $alice = $t->keys->create('alice');
+        $bob = $t->keys->create('bob');
+        $viewer = $t->keys->create('viewer', false);
+        $put = fn(?string $key, string $id = BOREHOLE) => $t->request('PUT', "/borehole/{$id}/favourite", [], $key === null ? [] : ['X-Api-Key' => $key]);
+        $delete = fn(?string $key, string $id = BOREHOLE) => $t->request('DELETE', "/borehole/{$id}/favourite", [], $key === null ? [] : ['X-Api-Key' => $key]);
+
+        same(401, $put(null)->status, 'no key, no mark');
+        same(403, $put($viewer)->status, 'a key that may not write');
+        same(401, $put('nonsense')->status);
+        same(400, $put($alice, '2016-12256')->status, 'not a DOV id');
+        same(405, $t->get('/borehole/' . BOREHOLE . '/favourite', $alice)->status);
+        same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM borehole_favourites')->fetchColumn());
+
+        $marked = $put($alice);
+        same(200, $marked->status);
+        same(['dovId' => BOREHOLE, 'favourite' => ['setBy' => 'alice', 'setAt' => '2026-10-17T12:00:00Z']], $marked->data());
+        same([], $t->dov->urls, 'marking never asks DOV: the borehole need not be in the library');
+
+        // Everyone sees it, without a key too.
+        $list = $t->get('/borehole/favourites', null, ['ids' => BOREHOLE . ',2016-000002'])->data();
+        same(['type' => 'borehole', 'favourites' => [BOREHOLE => ['setBy' => 'alice', 'setAt' => '2026-10-17T12:00:00Z']]], $list);
+        same(['favourites' => []], array_intersect_key($t->get('/borehole/favourites', $bob, ['ids' => '2016-000002'])->data(), ['favourites' => 1]));
+        same(400, $t->get('/borehole/favourites', null)->status, 'ids are needed');
+        same(400, $t->get('/borehole/favourites', null, ['ids' => 'abc'])->status);
+        same(400, $t->get('/borehole/favourites', null, ['ids' => implode(',', array_fill(0, 201, BOREHOLE))])->status, 'at most 200 ids');
+        same(405, $t->request('POST', '/borehole/favourites', [], ['X-Api-Key' => $alice])->status);
+        same(400, $t->get('/cpt/favourites', $alice)->status, 'only boreholes have favourites');
+        same(404, $t->request('PUT', '/cpt/' . CPT . '/favourite', [], ['X-Api-Key' => $alice])->status);
+
+        // The borehole's own answer and near carry the mark.
+        $t->dov->default = FakeTransport::xml(borehole_xml());
+        $t->clock->advance(60);
+        same(['setBy' => 'alice', 'setAt' => '2026-10-17T12:00:00Z'], $t->get('/borehole/' . BOREHOLE, null)->data()['favourite']);
+        [$lat, $lon] = CptLibrary\Geo\Lambert72::toWgs84(152000, 212000);
+        $near = $t->get('/borehole', null, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data();
+        same(['setBy' => 'alice', 'setAt' => '2026-10-17T12:00:00Z'], $near['dov'][0]['favourite']);
+
+        // Marking again records the new key and time; one mark per borehole.
+        $again = $put($bob)->data();
+        same(['setBy' => 'bob', 'setAt' => '2026-10-17T12:01:00Z'], $again['favourite']);
+        same(1, (int)$t->pdo->query('SELECT COUNT(*) FROM borehole_favourites')->fetchColumn());
+
+        // Any key that may write clears it; clearing twice is fine.
+        same(403, $delete($viewer)->status);
+        same(401, $delete(null)->status);
+        same(['dovId' => BOREHOLE, 'favourite' => null], $delete($alice)->data());
+        same(200, $delete($alice)->status, 'clearing a borehole without a mark');
+        same(null, $t->get('/borehole/' . BOREHOLE, null)->data()['favourite']);
+        same(null, $t->get('/borehole', null, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data()['dov'][0]['favourite']);
+        check(!array_key_exists('favourite', $t->get('/cpt', null, ['near' => "{$lat},{$lon}", 'radius' => '500'])->data()), 'CPTs carry no favourite');
+    },
+
     // ---- errors and logs ------------------------------------------------
 
     'errors are JSON without internals' => function (): void {
