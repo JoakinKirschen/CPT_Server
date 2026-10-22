@@ -113,15 +113,19 @@ return [
             same($visibility, $created->data()['visibility']);
             $ids[$visibility] = $created->data()['id'];
         }
-        $sees = static fn(string $key): array => array_keys(array_filter($ids, static fn(string $id): bool => $t->get('/cpt/' . $id, $key)->status === 200));
+        $sees = static fn(?string $key): array => array_keys(array_filter($ids, static fn(string $id): bool => $t->get('/cpt/' . $id, $key)->status === 200));
         same(['private', 'group', 'library'], $sees($alice), 'the owner sees all three');
         same(['group', 'library'], $sees($bob), 'the group sees group and library');
         same(['library'], $sees($carol), 'a key without a group sees the library');
         same(['library'], $sees($dave), 'another group too');
-        same(401, $t->get('/cpt/' . $ids['library'], null)->status, 'no upload without a key');
+        // 1.6.0: without a key the library's uploads, and only those.
+        same(['library'], $sees(null), 'without a key only the library');
+        same(true, str_contains((string)$t->get('/cpt/' . $ids['library'], null)->data()['content'], '#EOH'), 'with its text');
+        same('No shared library upload with this id; private and group uploads need a key.', $t->get('/cpt/' . $ids['private'], null)->data()['message']);
         $near = static fn(?string $key): array => array_column($t->get('/cpt', $key, ['near' => "{$lat},{$lon}", 'radius' => '100'])->data()['uploads'], 'name');
         same(['group', 'library'], (function () use ($near, $bob) { $names = $near($bob); sort($names); return $names; })());
-        same([], $near(null));
+        same(['library'], $near(null), 'near without a key lists the library uploads');
+        same(401, $t->request('DELETE', '/cpt/' . $ids['library'])->status, 'deleting still needs a key');
         $summary = $t->get('/cpt/' . $ids['library'], $carol)->data();
         same('alice', $summary['owner']);
         same(['method' => 'survey', 'accuracyM' => 5, 'text' => null], $summary['location']);

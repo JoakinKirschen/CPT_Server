@@ -14,8 +14,9 @@ use PDO;
 /**
  * Uploaded CPTs (the table keeps its 1.0 name, private_cpts). Each has a
  * visibility (1.2.0): private (its owner only), group (the owner's group)
- * or library (every key). Every read is scoped by visible(): an upload the
- * reader may not see reads as "not found". Only the owner deletes.
+ * or library (every key, and since 1.6.0 everyone: a request without a key
+ * reads library uploads too). Every read is scoped by visible(): an upload
+ * the reader may not see reads as "not found". Only the owner deletes.
  */
 final class PrivateCptRepository
 {
@@ -79,9 +80,6 @@ final class PrivateCptRepository
     /** An upload $reader may see, or null. */
     public function find(?User $reader, string $publicId, bool $withContent): ?array
     {
-        if ($reader === null) {
-            return null;
-        }
         [$where, $parameters] = self::visible($reader);
         $statement = $this->pdo->prepare(self::SELECT . ' WHERE p.public_id = ? AND ' . $where);
         $statement->execute(array_merge([$publicId], $parameters));
@@ -99,9 +97,6 @@ final class PrivateCptRepository
     /** @return list<array<string,mixed>> the uploads $reader may see in the box */
     public function inBox(?User $reader, float $minLat, float $maxLat, float $minLon, float $maxLon, int $limit): array
     {
-        if ($reader === null) {
-            return [];
-        }
         [$where, $parameters] = self::visible($reader);
         $statement = $this->pdo->prepare(
             self::SELECT . ' WHERE p.latitude BETWEEN ? AND ? AND p.longitude BETWEEN ? AND ? AND ' . $where . ' LIMIT ' . max(1, $limit)
@@ -112,9 +107,12 @@ final class PrivateCptRepository
 
     private const SELECT = 'SELECT p.*, o.name AS owner_name FROM private_cpts p JOIN api_users o ON o.id = p.owner_id';
 
-    /** @return array{0: string, 1: list<mixed>} the visibility condition for $reader */
-    private static function visible(User $reader): array
+    /** @return array{0: string, 1: list<mixed>} the visibility condition for $reader (null: no key, the library only) */
+    private static function visible(?User $reader): array
     {
+        if ($reader === null) {
+            return ["p.visibility = 'library'", []];
+        }
         if ($reader->group === null) {
             return ["(p.owner_id = ? OR p.visibility = 'library')", [$reader->id]];
         }

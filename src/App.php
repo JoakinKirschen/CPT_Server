@@ -30,7 +30,8 @@ use PDO;
  *   GET    /cpt?near=lat,lon&radius=m   library CPTs around a point
  *   POST   /cpt                   upload a CPT (GEF or CSV text), private,
  *                                 group or library, after the quality check
- *   GET    /cpt/{uploadId}        an upload you may see
+ *   GET    /cpt/{uploadId}        an upload you may see (a library upload
+ *                                 without a key, 1.6.0)
  *   DELETE /cpt/{uploadId}        delete one of your uploads
  *   GET    /borehole/{dovId}, /interpretation/{dovId}   a DOV borehole or
  *                                 interpretation, kept like a DOV CPT (same
@@ -259,7 +260,7 @@ final class App
                 return $this->deletePrivate($id, self::requireKey($user, 'to delete an upload'));
             }
             $this->allow($method, ['GET', 'DELETE']);
-            return $this->getPrivate($id, self::requireKey($user, 'to read uploaded CPTs'));
+            return $this->getPrivate($id, $user);
         }
         $this->allow($method, ['GET']);
         return $this->getDov(DovKind::Cpt, $id, $request, $user);
@@ -456,7 +457,8 @@ final class App
         };
 
         $dov = $within($this->stores[$kind->value]->inBox($minLat, $maxLat, $minLon, $maxLon, $max * 5));
-        // Uploads exist for CPTs only, and only for a key that may see them.
+        // Uploads exist for CPTs only: those the key may see, without a key the
+        // library's (1.6.0).
         $uploads = $kind === DovKind::Cpt ? $within($this->privateCpts->inBox($user, $minLat, $maxLat, $minLon, $maxLon, $max * 5)) : [];
         $favourites = $kind === DovKind::Borehole ? $this->favourites->find(array_column($dov, 'dov_id')) : [];
         return Response::json(200, [
@@ -552,11 +554,13 @@ final class App
         return array_slice($found, 0, 20);
     }
 
-    private function getPrivate(string $id, User $user): Response
+    private function getPrivate(string $id, ?User $user): Response
     {
         $row = $this->privateCpts->find($user, $id, true);
         if ($row === null) {
-            throw new HttpError(404, 'not_found', 'No uploaded CPT with this id that this key may see.');
+            throw new HttpError(404, 'not_found', $user === null
+                ? 'No shared library upload with this id; private and group uploads need a key.'
+                : 'No uploaded CPT with this id that this key may see.');
         }
         return Response::json(200, $this->uploadSummary($row) + ['content' => $row['content']]);
     }

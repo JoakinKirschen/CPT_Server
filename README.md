@@ -32,10 +32,14 @@ Base URL, for example `https://nightdust.eu/cpt-api`. Responses are JSON,
   `GET /`, `GET /cpt/{dovId}`, `GET /borehole/{dovId}`,
   `GET /interpretation/{dovId}`, the `near` searches and the favourite
   boreholes (`GET /borehole/favourites`). These are limited
-  per IP address (see *Rate limits and cache* under Security). A `near` search without a key
-  returns no uploads.
+  per IP address (see *Rate limits and cache* under Security). Since
+  1.6.0, the uploads shared with the whole library (`visibility: library`)
+  are public too: a `near` search without a key lists them, and
+  `GET /cpt/{uploadId}` returns them. Private and group uploads still need
+  a key.
 - **With a key** (`X-Api-Key: cptlib_…`) you can also refresh DOV objects,
-  read earlier revisions, upload, read and delete uploads, and mark
+  read earlier revisions, upload and delete uploads, read private and group
+  uploads, and mark
   boreholes as favourites (1.5.0). A key has
   its own, larger limits.
 - A key that is sent must be valid. An invalid key is refused with 401; it is
@@ -52,9 +56,9 @@ Base URL, for example `https://nightdust.eu/cpt-api`. Responses are JSON,
 | `GET /cpt/{dovId}?revision={sha256}` | yes | Returns an exact earlier revision. |
 | `GET /cpt/{dovId}?format=xml` | no | Returns the raw XML; the metadata comes in `X-Cpt-*` headers. |
 | `GET /cpt/{dovId}/revisions` | yes | Lists every stored revision. |
-| `GET /cpt?near={lat},{lon}&radius={m}` | no | Lists the CPTs in the library within the radius (default 1000 m, max 10 000 m), sorted by distance: DOV CPTs in `dov`, and the uploads your key may see in `uploads`. It never asks DOV. |
+| `GET /cpt?near={lat},{lon}&radius={m}` | no | Lists the CPTs in the library within the radius (default 1000 m, max 10 000 m), sorted by distance: DOV CPTs in `dov`, and in `uploads` the uploads your key may see (without a key: the library's, 1.6.0). It never asks DOV. |
 | `POST /cpt` | yes | Uploads one of your own CPTs as GEF or CSV text, after the quality check. |
-| `GET /cpt/{uploadId}` | yes | Returns an upload your key may see, with its text. |
+| `GET /cpt/{uploadId}` | no for a library upload (1.6.0) | Returns an upload your key may see, with its text. Without a key: a library upload only. |
 | `DELETE /cpt/{uploadId}` | yes | Deletes one of your own uploads. |
 | `GET /borehole/{dovId}` | no | Returns the stored DOV borehole (*boring*), fetched from DOV when missing. Takes `refresh`, `revision` and `format` like a CPT, and has `/revisions`. |
 | `GET /interpretation/{dovId}` | no | The same for a DOV interpretation (*interpretatie*), such as a borehole's lithological description. |
@@ -194,9 +198,10 @@ Content-Type: application/json
   - `private` (the default): only the uploader;
   - `group`: the uploader and every key in the uploader's group
     (`bin/keys.php group`);
-  - `library`: every key.
+  - `library`: everyone. Before 1.6.0 this meant every key; since 1.6.0 a
+    library upload is also read without a key, like DOV data.
 
-  Uploads are never visible without a key.
+  Private and group uploads are never visible without a key.
 - `latitude` and `longitude` are optional for a private upload. A group or
   library upload needs both, and `location.method`. Give both or neither.
 - `location` says how the position is known, because many CPTs carry only a
@@ -323,7 +328,7 @@ contains stack traces, SQL or file paths. A 500 response also carries a
   Responses are capped at 8 MB and must be well-formed XML. The parser
   loads no external entities and makes no network access. This is not a
   proxy.
-- **API keys.** Reading DOV objects needs no key. Everything else needs
+- **API keys.** Reading DOV objects and library uploads needs no key. Everything else needs
   `X-Api-Key`, and a key that is sent must be valid. Keys are random, with
   238 bits of entropy. The database stores only an HMAC-SHA256 hash of each
   key, made with a secret pepper from the config file. Each user has one key.
@@ -445,7 +450,8 @@ answer, `GET /cpt/{id}`, possible duplicates and the `near` search, and
 short enough for the database column). Since 1.5.0 they cover favourite
 boreholes (who may set and clear them, everyone reads them, the lookup's
 limits, the mark in the borehole's answer and in `near`, one mark per
-borehole). Most of them
+borehole), and since 1.6.0 library uploads without a key (read and listed
+in `near`, never a private or group one, never deleted). Most of them
 need an **empty test database whose name contains `test`**, because the
 tests drop all its tables. Configure it in `tests/config.test.php` (copy
 `tests/config.test.example.php`) or with the `CPT_TEST_DB_*` environment
