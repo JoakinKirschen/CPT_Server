@@ -107,7 +107,8 @@ php bin/migrate.php
 Without SSH, open **phpMyAdmin**, select `USER_cptlib`, go to the *SQL* tab,
 and paste the contents of `migrations/001_initial.sql`, then
 `migrations/002_boreholes.sql`, then `migrations/003_public_and_uploads.sql`,
-then `migrations/004_upload_origin.sql`, in that order. Each file records its own
+then `migrations/004_upload_origin.sql`, then
+`migrations/005_borehole_favourites.sql`, in that order. Each file records its own
 version, so `bin/migrate.php` will not apply it twice later.
 
 ## 6. Web folder
@@ -219,7 +220,7 @@ php tests/run.php
 ```sh
 cd ~/cpt-library
 git pull
-php bin/migrate.php      # 1.2.0 adds 003_public_and_uploads.sql, 1.3.0 adds 004_upload_origin.sql; 1.4.0 has none
+php bin/migrate.php      # 1.2.0 adds 003_public_and_uploads.sql, 1.3.0 adds 004_upload_origin.sql; 1.4.0 has none; 1.5.0 adds 005_borehole_favourites.sql
 cp public/index.php public/.htaccess ~/domains/nightdust.eu/public_html/cpt-api/   # only if they changed
 php tests/run.php        # optional, against the test database
 ```
@@ -280,7 +281,7 @@ does this.
      way. (Or paste the new files from `migrations/` into phpMyAdmin's
      *SQL* tab, oldest first; 1.2.0 adds
      `003_public_and_uploads.sql` and 1.3.0 adds `004_upload_origin.sql`;
-     1.4.0 has no migration.)
+     1.4.0 has no migration; 1.5.0 adds `005_borehole_favourites.sql`.)
    - Put a user in a group with
      `/usr/local/bin/php /home/USER/cpt-library/bin/keys.php group joakin office --to-file`.
 

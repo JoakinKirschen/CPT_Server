@@ -30,11 +30,13 @@ Base URL, for example `https://nightdust.eu/cpt-api`. Responses are JSON,
 
 - **Without a key** you can read DOV objects and search near a point:
   `GET /`, `GET /cpt/{dovId}`, `GET /borehole/{dovId}`,
-  `GET /interpretation/{dovId}` and the `near` searches. These are limited
+  `GET /interpretation/{dovId}`, the `near` searches and the favourite
+  boreholes (`GET /borehole/favourites`). These are limited
   per IP address (see *Rate limits and cache* under Security). A `near` search without a key
   returns no uploads.
 - **With a key** (`X-Api-Key: cptlib_…`) you can also refresh DOV objects,
-  read earlier revisions, and upload, read and delete uploads. A key has
+  read earlier revisions, upload, read and delete uploads, and mark
+  boreholes as favourites (1.5.0). A key has
   its own, larger limits.
 - A key that is sent must be valid. An invalid key is refused with 401; it is
   never treated as "no key".
@@ -42,8 +44,6 @@ Base URL, for example `https://nightdust.eu/cpt-api`. Responses are JSON,
   request needs a key again, as before 1.2.0.
 - The CORS preflight (`OPTIONS`) never needs a key.
 
-| Method and path | What it does |
-|---|---|
 | Method and path | Key | What it does |
 |---|---|---|
 | `GET /` | no | Connection test: returns your user name (or `"anonymous": true`), the version and the licence. |
@@ -59,6 +59,9 @@ Base URL, for example `https://nightdust.eu/cpt-api`. Responses are JSON,
 | `GET /borehole/{dovId}` | no | Returns the stored DOV borehole (*boring*), fetched from DOV when missing. Takes `refresh`, `revision` and `format` like a CPT, and has `/revisions`. |
 | `GET /interpretation/{dovId}` | no | The same for a DOV interpretation (*interpretatie*), such as a borehole's lithological description. |
 | `GET /borehole?near={lat},{lon}&radius={m}` | no | Lists the boreholes in the library within the radius, like the CPT search. It never asks DOV. |
+| `GET /borehole/favourites?ids={dovId},{dovId}` | no | Which of these boreholes (at most 200) are favourites, who marked them and when (1.5.0). |
+| `PUT /borehole/{dovId}/favourite` | yes | Marks a borehole as a favourite; the key must be allowed to write (1.5.0). |
+| `DELETE /borehole/{dovId}/favourite` | yes | Clears the mark; any key that may write (1.5.0). |
 
 `{dovId}` must match `^\d{4}-\d{6}$`. This is `DOV_IDENTIFIER_ONLY` from the
 app's `js/project-information.js`, for example `2002-009953`.
@@ -149,6 +152,27 @@ dataset's own `sourceUrl` and `recordUrl`
   `upstream_invalid`) and stores nothing.
 - `GET /` lists the datasets the server keeps: `"datasets": ["cpt",
   "borehole", "interpretation"]`.
+
+### Favourite boreholes (1.5.0)
+
+A favourite marks a borehole whose data is of higher quality. The mark is
+shared: everyone sees it, with or without a key, and every key that may
+write can set or clear it. There is one mark per borehole; marking it again
+records the new key and time.
+
+- `PUT /borehole/{dovId}/favourite` answers `{"dovId": "2016-122561",
+  "favourite": {"setBy": "alice", "setAt": "2026-10-17T12:00:00Z"}}`.
+  `DELETE` answers `"favourite": null`, also when there was no mark. Without
+  a key: 401; with a key that may not write: 403.
+- The mark is kept by the DOV id (table `borehole_favourites`). The
+  borehole need not be in the library, and marking it never asks DOV.
+- `GET /borehole/favourites?ids=2016-122561,2016-000002` answers
+  `{"type": "borehole", "favourites": {"2016-122561": {"setBy": "alice",
+  "setAt": "…"}}}`; ids without a mark are left out. More than 200 ids, or
+  one that is not a DOV id, is a 400 `invalid_ids`.
+- `GET /borehole/{dovId}` and each borehole in `GET /borehole?near=` carry
+  `"favourite"`: the mark, or `null`.
+- `setBy` is the key's user name, as `GET /` names it.
 
 ### `POST /cpt`
 
@@ -269,7 +293,7 @@ contains stack traces, SQL or file paths. A 500 response also carries a
 
 | Status | Codes |
 |---|---|
-| 400 | `invalid_id`, `invalid_path`, `invalid_near`, `invalid_radius`, `invalid_revision`, `invalid_body` |
+| 400 | `invalid_id`, `invalid_ids`, `invalid_path`, `invalid_near`, `invalid_radius`, `invalid_revision`, `invalid_body` |
 | 401 | `unauthorized` (no key where one is needed, or an invalid key) |
 | 403 | `https_required`, `forbidden` |
 | 404 | `not_found` |
@@ -418,7 +442,10 @@ quality check, visibility and groups, and the duplicate checks. Since 1.3.0
 they cover where an upload's readings come from, and since 1.4.0 the
 `image-plot` and `ai-table` origins (accepted, read back from the upload
 answer, `GET /cpt/{id}`, possible duplicates and the `near` search, and
-short enough for the database column). Most of them
+short enough for the database column). Since 1.5.0 they cover favourite
+boreholes (who may set and clear them, everyone reads them, the lookup's
+limits, the mark in the borehole's answer and in `near`, one mark per
+borehole). Most of them
 need an **empty test database whose name contains `test`**, because the
 tests drop all its tables. Configure it in `tests/config.test.php` (copy
 `tests/config.test.example.php`) or with the `CPT_TEST_DB_*` environment
