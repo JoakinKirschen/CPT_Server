@@ -109,6 +109,44 @@ final class Config
             'log_days' => 90,
             'fetch_log_days' => 365,
         ],
+        // bin/seed-dov.php (1.7.0): DOV objects picked at random and added
+        // to the library by cron. Off until switched on here.
+        'seed' => [
+            'enabled' => false,
+            // The user the fetches are logged and budgeted under: create it
+            // with bin/keys.php create seeder --read-only (the key is not used).
+            'user' => 'seeder',
+            // New objects per run (the command's --count, at most per_run_max).
+            'per_run' => 20,
+            'per_run_max' => 100,
+            // New objects per preset per day.
+            'max_per_day' => 300,
+            // Between two DOV fetches: the server's DOV budget (20 a minute)
+            // stays free for the people using the library.
+            'pause_seconds' => 6,
+            // WFS features read per random offset.
+            'page_size' => 10,
+            // kind: cpt or borehole; layer: DOV's WFS layer; filter: an ECQL
+            // expression on its attributes (empty: all). Check a filter with
+            // php bin/seed-dov.php <preset> --dry-run before cron uses it.
+            'presets' => [
+                'cpt-e' => [
+                    'kind' => 'cpt',
+                    'layer' => 'dov-pub:Sonderingen',
+                    'filter' => "sondeermethode ILIKE '%elektr%'",
+                ],
+                'cpt-other' => [
+                    'kind' => 'cpt',
+                    'layer' => 'dov-pub:Sonderingen',
+                    'filter' => "sondeermethode IS NULL OR NOT (sondeermethode ILIKE '%elektr%')",
+                ],
+                'borehole' => [
+                    'kind' => 'borehole',
+                    'layer' => 'dov-pub:Boringen',
+                    'filter' => "doel ILIKE '%geolog%' OR doel ILIKE '%geotechn%'",
+                ],
+            ],
+        ],
     ];
 
     private array $values;
