@@ -75,4 +75,21 @@ return [
         'mysqldump' => 'mysqldump',
         'keep_days' => 14,
     ],
+
+    // DOV objects picked at random and added by cron (1.7.0,
+    // bin/seed-dov.php). Off until enabled. Create the seeder's user first:
+    // php bin/keys.php create seeder --read-only (its key is not needed).
+    // Check each preset with: php bin/seed-dov.php <preset> --dry-run
+    'seed' => [
+        'enabled' => false,
+        'per_run' => 20,          // new objects per cron run
+        'max_per_day' => 300,     // per preset
+        'pause_seconds' => 6,     // between two DOV fetches
+        // To change a preset's filter (ECQL on DOV's WFS layer), for
+        // example to one area (the geometry attribute's name is in the
+        // layer's DescribeFeatureType; check with --dry-run):
+        // 'presets' => [
+        //     'cpt-e' => ['filter' => "sondeermethode ILIKE '%elektr%' AND BBOX(geom, 3.5, 50.9, 3.9, 51.2, 'EPSG:4326')"],
+        // ],
+    ],
 ];

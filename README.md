@@ -374,6 +374,45 @@ contains stack traces, SQL or file paths. A 500 response also carries a
   options file rather than on the command line. If `mysqldump` is not
   available, it falls back to a PHP dumper.
 
+## Seeding the library from DOV (1.7.0)
+
+`bin/seed-dov.php` adds DOV objects picked at random, run by cron. Each
+preset names a dataset, DOV's WFS layer and a filter on its attributes
+(ECQL, in `config.php` under `seed.presets`):
+
+| Preset | Dataset | WFS layer | Filter |
+|---|---|---|---|
+| `cpt-e` | CPTs | `dov-pub:Sonderingen` | `sondeermethode ILIKE '%elektr%'` (electrical CPTs) |
+| `cpt-other` | CPTs | `dov-pub:Sonderingen` | the other CPTs, and those without a method |
+| `borehole` | boreholes | `dov-pub:Boringen` | `doel ILIKE '%geolog%' OR doel ILIKE '%geotechn%'` (geological and geotechnical research) |
+
+A run asks the WFS how many features match, reads pages at random
+offsets, keeps the ids the library does not hold (and that DOV did not
+recently answer as missing), and fetches them one by one exactly as
+`GET /cpt/{id}` or `GET /borehole/{id}` does: the same XML checks,
+revisions, fetch log, per-id lock, storage cap and DOV budgets. It runs
+under its own user (`seed.user`, default `seeder`, created with
+`bin/keys.php create seeder --read-only`; its key is never used), so its
+fetches have their own hourly budget and show in `dov_fetches`. Between two
+fetches it waits `seed.pause_seconds` (6 s), so DOV's budget of 20 fetches a
+minute for the whole server stays free for people. It stops at
+`seed.per_run` new objects (20; `--count=N` up to `seed.per_run_max`), at
+`seed.max_per_day` per preset (300), when a DOV budget is used up, or when
+the library is full.
+
+```sh
+php bin/seed-dov.php cpt-e --dry-run      # how many match, and the ids it would fetch
+php bin/seed-dov.php cpt-e --verbose      # one run, with a summary
+```
+
+It is off until `seed.enabled` is true. A dry run works without it and
+fetches nothing: run one per preset first, because the filters use DOV's
+attribute names (`sondeermethode`, `doel`), which DOV can change; a filter
+that matches nothing, or a WFS error, fails the run (cron mails it). The
+WFS address is DOV's own (`https://www.dov.vlaanderen.be/geoserver/wfs`),
+fixed in `src/Dov/DovSearch.php`; no redirect is followed. Seeded objects
+carry the same licence and attribution as any other.
+
 ## DOV data licence and attribution
 
 DOV publishes its data, including the CPT dataset *Sonderingen*, under the
@@ -421,7 +460,7 @@ them.
 ```
 public/            index.php + .htaccess: the only files under public_html
 src/               the application (namespace CptLibrary)
-bin/               setup (no-SSH first run), migrate, keys, backup (cron), cleanup (cron), reindex
+bin/               setup (no-SSH first run), migrate, keys, backup (cron), cleanup (cron), seed-dov (cron, 1.7.0), reindex
 migrations/        SQL schema, applied in order by bin/migrate.php
 config/            config.example.php (the real config.php is not committed)
 tests/             php tests/run.php
@@ -451,7 +490,12 @@ short enough for the database column). Since 1.5.0 they cover favourite
 boreholes (who may set and clear them, everyone reads them, the lookup's
 limits, the mark in the borehole's answer and in `near`, one mark per
 borehole), and since 1.6.0 library uploads without a key (read and listed
-in `near`, never a private or group one, never deleted). Most of them
+in `near`, never a private or group one, never deleted). Since 1.7.0 they
+cover the seeder (the WFS query and the ids it reads, new objects fetched
+through the service under the seeder's user with pauses, objects held or
+recently missing skipped, a DOV 404, the borehole preset, the day's limit
+per preset, the DOV budget and the storage cap, the dry run, and its
+failures). Most of them
 need an **empty test database whose name contains `test`**, because the
 tests drop all its tables. Configure it in `tests/config.test.php` (copy
 `tests/config.test.example.php`) or with the `CPT_TEST_DB_*` environment

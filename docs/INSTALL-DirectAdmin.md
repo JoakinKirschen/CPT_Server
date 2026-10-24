@@ -198,6 +198,24 @@ something fails.
 |---|---|---|---|---|---|
 | 17 | 3 | * | * | * | `/usr/local/php83/bin/php /home/USER/cpt-library/bin/backup.php` |
 | 47 | 3 | * | * | * | `/usr/local/php83/bin/php /home/USER/cpt-library/bin/cleanup.php` |
+| 11 | * | * | * | * | `/usr/local/php83/bin/php /home/USER/cpt-library/bin/seed-dov.php cpt-e` |
+| 31 | * | * | * | * | `/usr/local/php83/bin/php /home/USER/cpt-library/bin/seed-dov.php cpt-other` |
+| 51 | */2 | * | * | * | `/usr/local/php83/bin/php /home/USER/cpt-library/bin/seed-dov.php borehole` |
+
+- **Seeding (1.7.0, optional).** The three `seed-dov.php` jobs add DOV
+  objects picked at random: electrical CPTs, the other CPTs, and boreholes
+  of geological or geotechnical research (see *Seeding the library from
+  DOV* in the README). Before adding them:
+  1. create the seeder's user: `php bin/keys.php create seeder --read-only`
+     (the key it prints is not needed);
+  2. check each preset: `php bin/seed-dov.php cpt-e --dry-run` (and
+     `cpt-other`, `borehole`) should report thousands of matches and list
+     ids;
+  3. set `'seed' => ['enabled' => true]` in `config/config.php`.
+
+  With the defaults each job adds at most 20 objects a run and 300 a day
+  per preset, with 6 s between fetches. Without SSH, run the dry run as a
+  one-off cron job with `--to-file` and read `~/cpt-output.txt`.
 
 - **Backups.** By default they are kept for 14 days (`backup.keep_days`),
   and the newest one is always kept. They contain the user table, but only

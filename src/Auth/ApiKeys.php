@@ -118,6 +118,15 @@ final class ApiKeys
         }
     }
 
+    /** The active (not revoked) user of this name, or null (1.7.0: the seeder's user). */
+    public function activeUser(string $name): ?User
+    {
+        $statement = $this->pdo->prepare('SELECT id, name, can_write, group_name FROM api_users WHERE name = ? AND revoked_at IS NULL');
+        $statement->execute([$name]);
+        $row = $statement->fetch();
+        return $row ? new User((int)$row['id'], (string)$row['name'], (bool)$row['can_write'], $row['group_name'] === null ? null : (string)$row['group_name']) : null;
+    }
+
     /** @return list<array<string,mixed>> */
     public function list(): array
     {
