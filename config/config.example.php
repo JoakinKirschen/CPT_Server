@@ -60,7 +60,7 @@ return [
 
     'dov' => [
         // Identify the server to DOV; a contact URL or address helps them.
-        'user_agent' => 'StructuralCanvas-CPT-Library/1.0 (+https://nightdust.eu/cpt-api/)',
+        'user_agent' => 'StructuralCanvas-CPT-Library/1.0 (+https://structuralcanvas.eu/cpt-api/)',
         'max_bytes' => 8 * 1024 * 1024,
     ],
 

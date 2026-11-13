@@ -25,7 +25,7 @@ long-running processes and no root access. See
 
 ## API
 
-Base URL, for example `https://nightdust.eu/cpt-api`. Responses are JSON,
+Base URL, for example `https://structuralcanvas.eu/cpt-api`. Responses are JSON,
 `Cache-Control: no-store`.
 
 - **Without a key** you can read DOV objects and search near a point:

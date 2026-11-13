@@ -1,9 +1,10 @@
 # Installing on DirectAdmin shared hosting
 
-This guide installs the library at `https://nightdust.eu/cpt-api/`. Replace
-`USER` with your DirectAdmin account name and `nightdust.eu` with your
-domain. Menu names differ a little between DirectAdmin skins; the classic
-names are given here.
+This guide installs the library at `https://structuralcanvas.eu/cpt-api/`.
+Replace `USER` with your DirectAdmin account name and `structuralcanvas.eu`
+with your domain. Menu names differ a little between DirectAdmin skins; the
+classic names are given here. For a library that is already installed and
+moves to another domain, see *Moving to another domain* below.
 
 ## Folder layout
 
@@ -14,7 +15,7 @@ names are given here.
 │   ├── src/  bin/  migrations/  tests/
 │   └── var/log/                       request and error logs (created automatically)
 ├── cpt-library-backups/               nightly database backups, chmod 700
-└── domains/nightdust.eu/public_html/
+└── domains/structuralcanvas.eu/public_html/
     └── cpt-api/
         ├── index.php                  copied from cpt-library/public/
         └── .htaccess                  copied from cpt-library/public/
@@ -30,17 +31,17 @@ code somewhere else, edit the `$root` line in the copied `index.php`.
    you want the MySQL version too, also fill in `DB_*` (step 2 creates the
    database).
 2. Upload it to `public_html/`.
-3. Open `https://nightdust.eu/probe.php?token=…` in a browser, and also run
+3. Open `https://structuralcanvas.eu/probe.php?token=…` in a browser, and also run
    it over SSH with `php probe.php`, because cron uses the CLI settings.
 4. Send the output, then **delete `probe.php`** from the server.
 
 ## 1. PHP version and SSL
 
-1. **Account Manager → Domain Setup → nightdust.eu**: set the PHP version to
+1. **Account Manager → Domain Setup → structuralcanvas.eu**: set the PHP version to
    8.3. Some servers have this under *PHP Version Selector*.
 2. **Account Manager → SSL Certificates**: choose *Free & automatic
-   certificate from Let's Encrypt*. Include `nightdust.eu` and
-   `www.nightdust.eu` and save. DirectAdmin renews the certificate itself.
+   certificate from Let's Encrypt*. Include `structuralcanvas.eu` and
+   `www.structuralcanvas.eu` and save. DirectAdmin renews the certificate itself.
 3. Back in **Domain Setup**, tick *Force SSL with https redirect*. The API
    refuses plain HTTP anyway (`require_https`).
 
@@ -114,8 +115,8 @@ version, so `bin/migrate.php` will not apply it twice later.
 ## 6. Web folder
 
 ```sh
-mkdir -p ~/domains/nightdust.eu/public_html/cpt-api
-cp public/index.php public/.htaccess ~/domains/nightdust.eu/public_html/cpt-api/
+mkdir -p ~/domains/structuralcanvas.eu/public_html/cpt-api
+cp public/index.php public/.htaccess ~/domains/structuralcanvas.eu/public_html/cpt-api/
 ```
 
 The `.htaccess` file does two things:
@@ -155,12 +156,12 @@ php bin/keys.php revoke colleague
 
 ```sh
 KEY=cptlib_...
-curl -s https://nightdust.eu/cpt-api/ -H "X-Api-Key: $KEY"
-curl -s https://nightdust.eu/cpt-api/cpt/2002-009953 -H "X-Api-Key: $KEY" | head -c 600
-curl -s "https://nightdust.eu/cpt-api/cpt?near=51.05,3.72&radius=2000" -H "X-Api-Key: $KEY"
-curl -s -i -X OPTIONS https://nightdust.eu/cpt-api/cpt/2002-009953 -H "Origin: null" -H "Access-Control-Request-Headers: x-api-key"
-curl -s https://nightdust.eu/cpt-api/                                   # "anonymous": true without a key
-curl -s https://nightdust.eu/cpt-api/ -H "X-Api-Key: wrong"             # 401 with a wrong key
+curl -s https://structuralcanvas.eu/cpt-api/ -H "X-Api-Key: $KEY"
+curl -s https://structuralcanvas.eu/cpt-api/cpt/2002-009953 -H "X-Api-Key: $KEY" | head -c 600
+curl -s "https://structuralcanvas.eu/cpt-api/cpt?near=51.05,3.72&radius=2000" -H "X-Api-Key: $KEY"
+curl -s -i -X OPTIONS https://structuralcanvas.eu/cpt-api/cpt/2002-009953 -H "Origin: null" -H "Access-Control-Request-Headers: x-api-key"
+curl -s https://structuralcanvas.eu/cpt-api/                                   # "anonymous": true without a key
+curl -s https://structuralcanvas.eu/cpt-api/ -H "X-Api-Key: wrong"             # 401 with a wrong key
 ```
 
 The first CPT request should answer `"cache":"miss"` and the second
@@ -176,8 +177,8 @@ in DOV* shows `/data/boring/<id>`; the description's id is in its
 *Download* link, `/data/interpretatie/<id>.xml`):
 
 ```sh
-curl -s https://nightdust.eu/cpt-api/borehole/BOREHOLE_ID -H "X-Api-Key: $KEY" | head -c 600
-curl -s https://nightdust.eu/cpt-api/interpretation/INTERPRETATION_ID -H "X-Api-Key: $KEY" | head -c 600
+curl -s https://structuralcanvas.eu/cpt-api/borehole/BOREHOLE_ID -H "X-Api-Key: $KEY" | head -c 600
+curl -s https://structuralcanvas.eu/cpt-api/interpretation/INTERPRETATION_ID -H "X-Api-Key: $KEY" | head -c 600
 ```
 
 Their DOV XML shape and DOV's redirect for them were not seen from the host
@@ -239,9 +240,39 @@ php tests/run.php
 cd ~/cpt-library
 git pull
 php bin/migrate.php      # 1.2.0 adds 003_public_and_uploads.sql, 1.3.0 adds 004_upload_origin.sql; 1.4.0 has none; 1.5.0 adds 005_borehole_favourites.sql; 1.6.0 has none
-cp public/index.php public/.htaccess ~/domains/nightdust.eu/public_html/cpt-api/   # only if they changed
+cp public/index.php public/.htaccess ~/domains/structuralcanvas.eu/public_html/cpt-api/   # only if they changed
 php tests/run.php        # optional, against the test database
 ```
+
+## Moving to another domain
+
+The code, `config/config.php`, the database, the backups and the cron jobs
+are in `/home/USER`, outside every domain's folder. Only the two files of
+step 6 belong to a domain, so a move to another domain of the same account
+needs no new database, keys or cron jobs:
+
+1. Add the new domain under **Account Manager → Domain Setup** and give it
+   PHP 8.3, a Let's Encrypt certificate and *Force SSL* as in step 1.
+2. Make its web folder as in step 6:
+   ```sh
+   mkdir -p ~/domains/NEW-DOMAIN/public_html/cpt-api
+   cp ~/cpt-library/public/index.php ~/cpt-library/public/.htaccess ~/domains/NEW-DOMAIN/public_html/cpt-api/
+   ```
+   Without SSH, copy the two files with DirectAdmin's **Files** manager.
+   `api.base_path` stays `/cpt-api`.
+3. Check the new address as in step 8. The API keys keep working: they
+   are in the database.
+4. In `config/config.php`, put the new address in `dov.user_agent`. If
+   `api.allowed_origins` names the site of before (`https://OLD-DOMAIN`),
+   name the new one instead. A page served from the same address as the
+   API needs no entry, and the offline file needs only `'null'`. The page
+   at `www.` is another address than the bare domain: forward it to the
+   bare domain, or add `https://www.NEW-DOMAIN` to the list.
+5. While the folder of before exists, both addresses answer from the same
+   library. Remove `domains/OLD-DOMAIN/public_html/cpt-api`, or the
+   domain, once nothing asks there any more. A copy of Structural Canvas
+   keeps the address it was built with until its user changes it under
+   Settings → CPT library server.
 
 ## Without SSH (File Manager and cron only)
 
@@ -263,7 +294,7 @@ does this.
 2. **Config.** In `cpt-library/config`, use **Create New File** to make
    `config.php` with the contents of step 4 above. Then tick it, enter `600`
    as the permission and click **Set**.
-3. **Web folder.** Create `domains/nightdust.eu/public_html/cpt-api` and
+3. **Web folder.** Create `domains/structuralcanvas.eu/public_html/cpt-api` and
    upload `index.php` and `.htaccess` into it, taking them from the `public`
    folder of the ZIP. On Windows, `.htaccess` may be hidden in Explorer.
 4. **Tables and your API key.** Under **Advanced Features → Cronjobs**, add
@@ -285,8 +316,8 @@ does this.
 5. **Check it** from your own computer. Windows 10 and later include
    `curl.exe`; use it in PowerShell:
    ```
-   curl.exe -s https://nightdust.eu/cpt-api/ -H "X-Api-Key: cptlib_..."
-   curl.exe -s https://nightdust.eu/cpt-api/cpt/2002-009953 -H "X-Api-Key: cptlib_..."
+   curl.exe -s https://structuralcanvas.eu/cpt-api/ -H "X-Api-Key: cptlib_..."
+   curl.exe -s https://structuralcanvas.eu/cpt-api/cpt/2002-009953 -H "X-Api-Key: cptlib_..."
    ```
 6. **Nightly jobs.** Add the two cron jobs from step 9, using the PHP path
    that worked in step 4.
