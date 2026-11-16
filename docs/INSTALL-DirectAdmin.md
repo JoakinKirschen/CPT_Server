@@ -147,6 +147,13 @@ php bin/keys.php revoke colleague
 - **Uploading needs a key** that may write, so give one to each person
   whose uploads you trust. A `--read-only` key can see uploads but not add
   any.
+- **OnWord's keys (1.8.0, optional).** When OnWord runs on the same
+  database, add `'onword' => ['enabled' => true]` to `config/config.php`
+  (and `'database' => '<name>'` inside it when OnWord's tables are in
+  another database this user may read). People then use the key they make
+  in OnWord under Programs, and OnWord's administrator sets under Accounts
+  who may read and who may upload. Needs migration
+  `006_onword_accounts.sql` (see *Updating*).
 - **Groups.** An upload marked `group` is visible to every key in the
   uploader's group, for example one office. Group names are 1–64
   letters, digits, `.`, `_`, `@` and `-`. A user who leaves the group no longer sees its
@@ -239,7 +246,7 @@ php tests/run.php
 ```sh
 cd ~/cpt-library
 git pull
-php bin/migrate.php      # 1.2.0 adds 003_public_and_uploads.sql, 1.3.0 adds 004_upload_origin.sql; 1.4.0 has none; 1.5.0 adds 005_borehole_favourites.sql; 1.6.0 has none
+php bin/migrate.php      # 1.2.0 adds 003_public_and_uploads.sql, 1.3.0 adds 004_upload_origin.sql; 1.4.0 has none; 1.5.0 adds 005_borehole_favourites.sql; 1.6.0 and 1.7.0 have none; 1.8.0 adds 006_onword_accounts.sql
 cp public/index.php public/.htaccess ~/domains/structuralcanvas.eu/public_html/cpt-api/   # only if they changed
 php tests/run.php        # optional, against the test database
 ```

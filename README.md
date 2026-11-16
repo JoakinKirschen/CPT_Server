@@ -374,6 +374,33 @@ contains stack traces, SQL or file paths. A 500 response also carries a
   options file rather than on the command line. If `mysqldump` is not
   available, it falls back to a PHP dumper.
 
+## One key for OnWord and the library (1.8.0)
+
+[OnWord](https://github.com/JoakinKirschen/OnWord), the office's word
+processor, has accounts; the library has keys that someone hands out with
+`bin/keys.php`. Where both use the same database, the library can accept
+OnWord's keys, so that people need one key, made by themselves:
+
+- In OnWord an account makes a key under **Programs** (`onw_…`), and an
+  administrator sets under **Accounts** what the account may do in the
+  library: nothing, read, or read and upload, and its group.
+- With `'onword' => ['enabled' => true]` in the config, the library
+  accepts that key in `X-Api-Key` like one of its own. It looks the
+  account up in OnWord's tables (`access_keys`, `users`) through its own
+  database connection; `'database'` names another database on the same
+  server when OnWord's tables are not in the library's.
+- The library keeps a user of its own for each such account
+  (`api_users.onword_user_id`), named by the account's address, so that
+  uploads and favourite marks have an owner. Its rights and group follow
+  OnWord's at every request. It holds no key: OnWord's is only compared.
+- An account without rights in the library, a key removed in OnWord, and
+  a user revoked here (`php bin/keys.php revoke <name>`) are refused with
+  401, like any wrong key. The library never writes to OnWord's tables.
+- Keys made with `bin/keys.php` (`cptlib_…`) keep working as before.
+
+In Structural Canvas the OnWord key goes in Settings → Online → CPT
+library server → API key, the same key as under OnWord there.
+
 ## Seeding the library from DOV (1.7.0)
 
 `bin/seed-dov.php` adds DOV objects picked at random, run by cron. Each
@@ -474,6 +501,12 @@ docs/              install guide
 php tests/run.php                 # all tests
 php tests/run.php revision        # tests whose name contains "revision"
 ```
+
+`tests/OnwordTest.php` (1.8.0) makes OnWord's two tables in the test
+database and checks its keys: the rights and the group, a reader that may
+not upload, rights changed or taken away in OnWord, a key removed there,
+a user revoked here, a name the library already has, and that nothing is
+accepted unless the config switches it on.
 
 The tests cover id validation, the DOV-only URL rule, redirects,
 authentication, key hashing and revocation, rate limits, revisions, the
