@@ -5,6 +5,13 @@
 #   FTP_SERVER=ftp.example.com FTP_USERNAME=… FTP_PASSWORD=… FTP_DIR=/cpt-library \
 #     tools/deploy-ftp.sh dist/code
 #
+# Several folders in one session, each with its folder on the host, in the order given:
+#
+#   tools/deploy-ftp.sh dist/migrations /cpt-library dist/code /cpt-library dist/web /…/public_html/cpt-api
+#
+# - One session for everything: a host's protection against password guessing counts sign-ins, and
+#   three uploads one after another, each with several connections, were refused at the third (1.9.0's
+#   first upload). FTP_PARALLEL (2) is how many connections a transfer uses.
 # - Every file of the folder is sent, whatever the host has. Files are added and replaced; nothing on the
 #   host is ever deleted. So config/config.php (the host's own settings, which the folder never holds),
 #   the logs under var/ and files the library no longer has all stay where they are.
@@ -24,20 +31,42 @@
 # FTP_CA_FILE (the certificate authorities to trust instead of the machine's, as a PEM file).
 set -euo pipefail
 
-folder="${1:?Usage: deploy-ftp.sh <folder to upload>}"
+# One folder goes to FTP_DIR; several are given as pairs, each folder followed by its folder on the host,
+# and are sent in that order in one session.
+usage="Usage: deploy-ftp.sh <folder> | deploy-ftp.sh <folder> <folder on the host> [<folder> <folder on the host> …]"
+[ "$#" -ge 1 ] || { echo "$usage" >&2; exit 1; }
 : "${FTP_SERVER:?Set FTP_SERVER to the host name of the FTP server}"
 : "${FTP_USERNAME:?Set FTP_USERNAME to the FTP account}"
 : "${FTP_PASSWORD:?Set FTP_PASSWORD to its password}"
-: "${FTP_DIR:?Set FTP_DIR to the folder on the host the site is served from}"
+if [ "$#" -eq 1 ]; then
+  set -- "$1" "${FTP_DIR:?Set FTP_DIR to the folder on the host}"
+fi
+[ $(($# % 2)) -eq 0 ] || { echo "$usage" >&2; exit 1; }
 fingerprint="${FTP_CERT_FINGERPRINT:-}"
 if [ -n "$fingerprint" ] && ! [[ "$fingerprint" =~ ^([0-9A-Fa-f]{2}:){19}[0-9A-Fa-f]{2}$ ]]; then
   echo "FTP_CERT_FINGERPRINT is not a fingerprint: twenty pairs of hex digits with colons between them." >&2
   exit 1
 fi
-[ -d "$folder" ] && [ -n "$(find "$folder" -type f -print -quit)" ] || {
-  echo "$folder is not a folder with files: make it first (tools/package-upload.sh)." >&2
-  exit 1
-}
+# The transfers of the session, one per pair. A name with a quote or a line break in it cannot be told
+# to lftp safely and is refused.
+transfers=""
+sent=""
+parallel="${FTP_PARALLEL:-2}"
+[[ "$parallel" =~ ^[1-8]$ ]] || { echo "FTP_PARALLEL is a number from 1 to 8." >&2; exit 1; }
+while [ "$#" -gt 0 ]; do
+  folder="$1" target="$2"
+  shift 2
+  [ -d "$folder" ] && [ -n "$(find "$folder" -type f -print -quit)" ] || {
+    echo "$folder is not a folder with files: make it first (tools/package-upload.sh)." >&2
+    exit 1
+  }
+  case "$folder$target" in
+    *\"* | *$'\n'*) echo "A folder's name may not hold a double quote or a line break." >&2; exit 1 ;;
+  esac
+  [ -n "$target" ] || { echo "The folder on the host for $folder is empty." >&2; exit 1; }
+  transfers+="mirror --reverse --transfer-all --no-perms --no-umask --parallel=$parallel --verbose=1 \"$folder\" \"$target\""$'\n'
+  sent+="$(find "$folder" -type f | wc -l) files to $target; "
+done
 
 roots="${FTP_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}"
 work="$(mktemp -d)"
@@ -116,9 +145,9 @@ set net:max-retries 3
 set net:timeout 30
 set net:reconnect-interval-base 5
 open --user "$FTP_USERNAME" --env-password -p "${FTP_PORT:-21}" "ftp://$FTP_SERVER"
-mirror --reverse --transfer-all --no-perms --no-umask --parallel=4 --verbose=1 "$folder" "$FTP_DIR"
+$transfers
 LFTP
   show_certificate
   exit 1
 fi
-echo "Uploaded $(find "$folder" -type f | wc -l) files to $FTP_SERVER:$FTP_DIR."
+echo "Uploaded to $FTP_SERVER: ${sent%; }."

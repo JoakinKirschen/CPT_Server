@@ -512,7 +512,9 @@ and folders (`docs/INSTALL-DirectAdmin.md` → *Updating automatically*).
   OnWord's: FTP with TLS and a certificate that verifies (a missing
   intermediate certificate is fetched and the chain checked; a host's own
   certificate only by its fingerprint). It adds and replaces and never
-  deletes, so the config, the logs and the backups stay.
+  deletes, so the config, the logs and the backups stay. The three
+  folders go in one session: three uploads in a row were refused at the
+  third by the host's protection against password guessing.
 - **The database follows by itself.** The migrations are uploaded first.
   The first request the new version serves applies what is pending, under
   a database lock, before anything reads the new schema, and writes a
