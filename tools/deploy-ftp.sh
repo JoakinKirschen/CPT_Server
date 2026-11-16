@@ -34,7 +34,10 @@ if [ -n "$fingerprint" ] && ! [[ "$fingerprint" =~ ^([0-9A-Fa-f]{2}:){19}[0-9A-F
   echo "FTP_CERT_FINGERPRINT is not a fingerprint: twenty pairs of hex digits with colons between them." >&2
   exit 1
 fi
-[ -f "$folder/index.html" ] || { echo "No index.html in $folder: make the folder first (npm run package:folder)." >&2; exit 1; }
+[ -d "$folder" ] && [ -n "$(find "$folder" -type f -print -quit)" ] || {
+  echo "$folder is not a folder with files: make it first (tools/package-upload.sh)." >&2
+  exit 1
+}
 
 roots="${FTP_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}"
 work="$(mktemp -d)"
