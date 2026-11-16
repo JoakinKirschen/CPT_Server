@@ -1,0 +1,113 @@
+name: CI
+
+# The tests on every pull request and on the library's branch; after a merge there, the upload to the
+# web host. Nothing about the host is in the repository: its account is in the repository's secrets
+# (FTP_SERVER, FTP_USERNAME, FTP_PASSWORD) and its folders in variables (FTP_CODE_DIR, FTP_WEB_DIR).
+
+on:
+  pull_request:
+  push:
+    branches: [claude/festive-sagan-2i9odr]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: root-test-pass
+          MARIADB_DATABASE: cptlib_test
+          MARIADB_USER: cpt
+          MARIADB_PASSWORD: cpt-test-pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+    steps:
+      - uses: actions/checkout@v4
+      - name: PHP with the database driver
+        run: |
+          php -v
+          php -m | grep -qi '^pdo_mysql$' || { sudo apt-get update -q && sudo apt-get install -y -q php-mysql; }
+          php -m | grep -i '^pdo_mysql$'
+      - name: Syntax of every PHP file
+        run: |
+          for f in $(git ls-files '*.php'); do php -l "$f" >/dev/null || exit 1; done
+      - name: The folders to upload never hold the host's settings
+        run: |
+          bash tools/package-upload.sh dist
+          test ! -e dist/code/config/config.php
+          test -f dist/code/src/bootstrap.php -a -f dist/web/index.php -a -f dist/web/.htaccess
+      - name: Tests
+        env:
+          CPT_TEST_DB_HOST: 127.0.0.1
+          CPT_TEST_DB_PORT: 3306
+          CPT_TEST_DB_NAME: cptlib_test
+          CPT_TEST_DB_USER: cpt
+          CPT_TEST_DB_PASS: cpt-test-pass
+        run: php tests/run.php
+
+  # Uploads the library after a merge, once the tests have passed. Skipped until the owner has entered
+  # the host's folders (docs/INSTALL-DirectAdmin.md → Updating automatically).
+  deploy:
+    needs: test
+    if: >-
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/claude/festive-sagan-2i9odr'
+      && vars.FTP_CODE_DIR != '' && vars.FTP_WEB_DIR != ''
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    env:
+      FTP_SERVER: ${{ secrets.FTP_SERVER }}
+      FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+      FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+      FTP_PORT: ${{ vars.FTP_PORT }}
+      FTP_CERT_FINGERPRINT: ${{ vars.FTP_CERT_FINGERPRINT }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -q && sudo apt-get install -y -q lftp
+      - run: bash tools/package-upload.sh dist
+      # The migrations first: the library applies what is pending at the first request of the new
+      # version, so they must all be on the host before the code that says it is that version.
+      - name: Upload the migrations
+        env:
+          FTP_DIR: ${{ vars.FTP_CODE_DIR }}
+        run: bash tools/deploy-ftp.sh dist/migrations
+      - name: Upload the code
+        env:
+          FTP_DIR: ${{ vars.FTP_CODE_DIR }}
+        run: bash tools/deploy-ftp.sh dist/code
+      - name: Upload the web folder
+        env:
+          FTP_DIR: ${{ vars.FTP_WEB_DIR }}
+        run: bash tools/deploy-ftp.sh dist/web
+      # Asking the library for its version also makes it apply the migrations.
+      - name: The library answers with the new version
+        if: vars.CPT_API_URL != ''
+        env:
+          CPT_API_URL: ${{ vars.CPT_API_URL }}
+        run: |
+          want=$(grep -o "CPT_LIBRARY_VERSION = '[^']*'" src/bootstrap.php | cut -d"'" -f2)
+          got=""
+          for attempt in 1 2 3 4 5 6 7 8; do
+            got=$(curl -sS -m 30 "${CPT_API_URL%/}/" | grep -o '"version":"[^"]*"' | cut -d'"' -f4 || true)
+            [ "$got" = "$want" ] && break
+            sleep 8
+          done
+          echo "### CPT library upload" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Uploaded: $want; the library answers: ${got:-nothing}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$got" != "$want" ]; then
+            echo "::error::The library answers version '${got:-nothing}', not $want. See var/log on the host."
+            exit 1
+          fi

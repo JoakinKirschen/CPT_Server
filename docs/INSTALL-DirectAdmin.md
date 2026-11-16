@@ -241,7 +241,43 @@ cp tests/config.test.example.php tests/config.test.php   # fill in the *_test da
 php tests/run.php
 ```
 
-## Updating
+## Updating automatically (1.9.0)
+
+GitHub can upload every merged change by itself, after its tests have
+passed. Once, on GitHub, in this repository under Settings → Secrets and
+variables → Actions:
+
+- **Secrets:** `FTP_SERVER`, `FTP_USERNAME`, `FTP_PASSWORD`: the same FTP
+  account as for Structural Canvas's site works, if it reaches both folders
+  below (an account whose folder is the home folder does).
+- **Variables:**
+  - `FTP_CODE_DIR`: the code folder as that account sees it, e.g.
+    `/cpt-library`;
+  - `FTP_WEB_DIR`: the web folder, e.g.
+    `/domains/structuralcanvas.eu/public_html/cpt-api`;
+  - `CPT_API_URL`: the library's address, e.g.
+    `https://structuralcanvas.eu/cpt-api`, so the run can check the version
+    it uploaded answers (optional, but without it a failed update shows
+    only in the log);
+  - `FTP_PORT` only when the server does not use port 21, and
+    `FTP_CERT_FINGERPRINT` only when the upload is refused for the server's
+    certificate (the run then shows the fingerprint to compare and enter).
+
+Without `FTP_CODE_DIR` and `FTP_WEB_DIR` nothing is uploaded. With them,
+every merge is on the host about a minute after its tests pass, and
+Actions → CI → Run workflow uploads the current state by hand.
+
+- The upload replaces `cpt-api/index.php`. If you edited its `$root` line
+  because the code is not at `/home/USER/cpt-library`, keep the code there
+  instead, or the upload will undo the edit.
+- Nothing on the host is deleted, and `config/config.php` is never touched.
+- The database is brought up to date by the library itself at the first
+  request after an upload; `php bin/migrate.php` is no longer needed. See
+  the README → *Updating automatically*.
+- A new setting in `config/config.php` (such as `onword` in 1.8.0) is
+  still yours to add.
+
+## Updating by hand
 
 ```sh
 cd ~/cpt-library

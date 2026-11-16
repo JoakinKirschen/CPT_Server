@@ -122,6 +122,18 @@ final class App
                 ->withHeaders($cors->headers($request->header('origin')) + self::securityHeaders($request->https))->send();
             return;
         }
+        if ($config->get('db.auto_migrate')) {
+            try {
+                (new Migrator($pdo, $root . '/migrations', $clock))->ensure(CPT_LIBRARY_VERSION, (string)$config->get('paths.log_dir'));
+            } catch (\Throwable $e) {
+                // New code on an old schema would answer wrongly: say it is being updated instead.
+                $logger->error($requestId, $e);
+                $cors = new Cors((array)$config->get('api.allowed_origins'));
+                Response::error(503, 'updating', 'The library is being updated; try again in a moment.', ['requestId' => $requestId])
+                    ->withHeaders($cors->headers($request->header('origin')) + self::securityHeaders($request->https) + ['Retry-After' => '30'])->send();
+                return;
+            }
+        }
         (new self($config, $pdo, $clock, new CurlTransport(), $logger))->handle($request, $requestId)->send();
     }
 

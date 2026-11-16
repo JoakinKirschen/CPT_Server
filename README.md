@@ -488,12 +488,46 @@ them.
 public/            index.php + .htaccess: the only files under public_html
 src/               the application (namespace CptLibrary)
 bin/               setup (no-SSH first run), migrate, keys, backup (cron), cleanup (cron), seed-dov (cron, 1.7.0), reindex
-migrations/        SQL schema, applied in order by bin/migrate.php
+migrations/        SQL schema, applied in order: by the library at the first request of a new version (1.9.0), or by bin/migrate.php
 config/            config.example.php (the real config.php is not committed)
 tests/             php tests/run.php
-tools/probe.php    one-off host check (step 0), delete after use
+tools/             probe.php (one-off host check, step 0; delete after use), package-upload.sh and deploy-ftp.sh (the upload)
 docs/              install guide
+.github/workflows/ ci.yml: the tests on every pull request, then the upload after a merge
 ```
+
+## Updating automatically (1.9.0)
+
+After a merge into `claude/festive-sagan-2i9odr`, GitHub runs the tests
+against a MariaDB and then uploads the library to the web host by itself
+(`.github/workflows/ci.yml`), once the owner has entered the host's account
+and folders (`docs/INSTALL-DirectAdmin.md` → *Updating automatically*).
+
+- **What is uploaded:** `src/`, `bin/`, `migrations/` and
+  `config/config.example.php` into the code folder outside the web root, and
+  `public/index.php` and `public/.htaccess` into the web folder
+  (`tools/package-upload.sh` makes the folders). Never `config/config.php`,
+  which is not in the repository.
+- **How:** `tools/deploy-ftp.sh`, the same script as Structural Canvas's and
+  OnWord's: FTP with TLS and a certificate that verifies (a missing
+  intermediate certificate is fetched and the chain checked; a host's own
+  certificate only by its fingerprint). It adds and replaces and never
+  deletes, so the config, the logs and the backups stay.
+- **The database follows by itself.** The migrations are uploaded first.
+  The first request the new version serves applies what is pending, under
+  a database lock, before anything reads the new schema, and writes a
+  marker (`schema-<version>.ok` beside the logs) so later requests only
+  look at that file. If it fails, requests answer 503 `updating` and the
+  error is in the log; `php bin/migrate.php` still works by hand.
+  `'db' => ['auto_migrate' => false]` turns it off. **A release with a
+  migration must raise `CPT_LIBRARY_VERSION`**, or the migration waits for
+  the next version.
+- **The run checks its work:** it asks the library for its version (which
+  also applies the migrations) and fails when the answer is not the
+  version it uploaded.
+- For a few seconds during an upload the host holds files of both
+  versions; a request in that moment can fail once.
+
 
 ## Tests
 
@@ -501,6 +535,10 @@ docs/              install guide
 php tests/run.php                 # all tests
 php tests/run.php revision        # tests whose name contains "revision"
 ```
+
+`tests/DeployTest.php` (1.9.0) checks the migrations the library applies
+itself: a database one migration behind, the marker, a second version,
+and a request that waits for another one's migration.
 
 `tests/OnwordTest.php` (1.8.0) makes OnWord's two tables in the test
 database and checks its keys: the rights and the group, a reader that may
