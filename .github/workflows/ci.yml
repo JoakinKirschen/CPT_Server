@@ -78,20 +78,18 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -q && sudo apt-get install -y -q lftp
       - run: bash tools/package-upload.sh dist
-      # The migrations first: the library applies what is pending at the first request of the new
-      # version, so they must all be on the host before the code that says it is that version.
-      - name: Upload the migrations
+      # One session for all three, so the host sees one upload and not three in a row. The migrations
+      # first: the library applies what is pending at the first request of the new version, so they
+      # must all be on the host before the code that says it is that version.
+      - name: Upload the migrations, the code and the web folder
         env:
-          FTP_DIR: ${{ vars.FTP_CODE_DIR }}
-        run: bash tools/deploy-ftp.sh dist/migrations
-      - name: Upload the code
-        env:
-          FTP_DIR: ${{ vars.FTP_CODE_DIR }}
-        run: bash tools/deploy-ftp.sh dist/code
-      - name: Upload the web folder
-        env:
-          FTP_DIR: ${{ vars.FTP_WEB_DIR }}
-        run: bash tools/deploy-ftp.sh dist/web
+          FTP_CODE_DIR: ${{ vars.FTP_CODE_DIR }}
+          FTP_WEB_DIR: ${{ vars.FTP_WEB_DIR }}
+        run: >-
+          bash tools/deploy-ftp.sh
+          dist/migrations "$FTP_CODE_DIR"
+          dist/code "$FTP_CODE_DIR"
+          dist/web "$FTP_WEB_DIR"
       # Asking the library for its version also makes it apply the migrations.
       - name: The library answers with the new version
         if: vars.CPT_API_URL != ''
