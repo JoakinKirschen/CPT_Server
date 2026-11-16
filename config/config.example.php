@@ -29,12 +29,12 @@ return [
         'require_https' => true,
     ],
 
-    // Keys made in OnWord (onw_…) as library keys (1.8.0): only when OnWord's
+    // Keys made in StructuralDocs (sd_…) as library keys (1.10.0): only when StructuralDocs's
     // tables are in this database, or in 'database' on the same server and
-    // readable by this user. OnWord's administrator sets each account's rights.
-    'onword' => [
+    // readable by this user. StructuralDocs's administrator sets each account's rights.
+    'structuraldocs' => [
         'enabled' => false,
-        // 'database' => 'USER_onword',
+        // 'database' => 'USER_structuraldocs',
     ],
 
     // DOV objects can be read without a key (1.2.0); false asks a key for

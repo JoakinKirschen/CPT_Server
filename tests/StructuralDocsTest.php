@@ -1,14 +1,14 @@
 <?php
 /*
- * Keys made in OnWord as library keys (1.8.0), against a real test
- * database that also holds OnWord's two tables, as on a host where both
+ * Keys made in StructuralDocs as library keys (1.10.0), against a real test
+ * database that also holds StructuralDocs's two tables, as on a host where both
  * use one database.
  */
 
 declare(strict_types=1);
 
-/** OnWord's users and access_keys tables as its schema 13 makes them, with accounts by name. */
-function onword_tables(PDO $pdo): void
+/** StructuralDocs's users and access_keys tables as its schema 1 makes them, with accounts by name. */
+function structuraldocs_tables(PDO $pdo): void
 {
     $pdo->exec("CREATE TABLE users (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, email VARCHAR(190) NOT NULL UNIQUE, name VARCHAR(100) NOT NULL,
         password_hash VARCHAR(255) NOT NULL, sso_subject VARCHAR(255) NULL, library VARCHAR(8) NOT NULL DEFAULT '',
@@ -17,29 +17,29 @@ function onword_tables(PDO $pdo): void
         key_hash VARCHAR(64) NOT NULL UNIQUE, created_at BIGINT NOT NULL, used_at BIGINT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
 }
 
-/** An OnWord account with a key; returns the key as OnWord shows it once. */
-function onword_account(PDO $pdo, string $email, string $library = '', string $group = ''): string
+/** An StructuralDocs account with a key; returns the key as StructuralDocs shows it once. */
+function structuraldocs_account(PDO $pdo, string $email, string $library = '', string $group = ''): string
 {
     $pdo->prepare('INSERT INTO users (email, name, password_hash, library, library_group, created_at) VALUES (?, ?, ?, ?, ?, 0)')
         ->execute([$email, ucfirst(strtok($email, '@')), 'x', $library, $group]);
-    $key = 'onw_' . bin2hex(random_bytes(20));
+    $key = 'sd_' . bin2hex(random_bytes(20));
     $pdo->prepare('INSERT INTO access_keys (user_id, name, key_hash, created_at) VALUES (?, ?, ?, 0)')
         ->execute([(int)$pdo->lastInsertId(), 'Structural Canvas', hash('sha256', $key)]);
     return $key;
 }
 
-function onword_rights(PDO $pdo, string $email, string $library, string $group = ''): void
+function structuraldocs_rights(PDO $pdo, string $email, string $library, string $group = ''): void
 {
     $pdo->prepare('UPDATE users SET library = ?, library_group = ? WHERE email = ?')->execute([$library, $group, $email]);
 }
 
 return [
-    'an OnWord key is a library key with the rights its administrator set' => function (): void {
-        $t = new TestApp(['onword' => ['enabled' => true]]);
-        onword_tables($t->pdo);
-        $writer = onword_account($t->pdo, 'ann@example.com', 'write', 'office');
-        $reader = onword_account($t->pdo, 'bea+site@example.com', 'read');
-        $nobody = onword_account($t->pdo, 'cas@example.com');
+    'an StructuralDocs key is a library key with the rights its administrator set' => function (): void {
+        $t = new TestApp(['structuraldocs' => ['enabled' => true]]);
+        structuraldocs_tables($t->pdo);
+        $writer = structuraldocs_account($t->pdo, 'ann@example.com', 'write', 'office');
+        $reader = structuraldocs_account($t->pdo, 'bea+site@example.com', 'read');
+        $nobody = structuraldocs_account($t->pdo, 'cas@example.com');
 
         $ann = $t->get('/', $writer);
         same(200, $ann->status);
@@ -52,13 +52,13 @@ return [
         same(false, $bea['canWrite']);
         same(null, $bea['group']);
         same(401, $t->get('/', $nobody)->status, 'an account without rights in the library');
-        same(401, $t->get('/', 'onw_' . str_repeat('0', 40))->status, 'a key OnWord does not have');
-        same(401, $t->get('/', 'onw_short')->status);
+        same(401, $t->get('/', 'sd_' . str_repeat('0', 40))->status, 'a key StructuralDocs does not have');
+        same(401, $t->get('/', 'sd_short')->status);
 
         // One library user per account, however often it comes.
         $t->get('/', $writer);
-        same(2, (int)$t->pdo->query('SELECT COUNT(*) FROM api_users WHERE onword_user_id IS NOT NULL')->fetchColumn());
-        same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM api_users WHERE key_hash IS NOT NULL')->fetchColumn(), 'OnWord\'s key is not kept here');
+        same(2, (int)$t->pdo->query('SELECT COUNT(*) FROM api_users WHERE structuraldocs_user_id IS NOT NULL')->fetchColumn());
+        same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM api_users WHERE key_hash IS NOT NULL')->fetchColumn(), 'StructuralDocs\'s key is not kept here');
 
         // A writer uploads; a reader may not.
         $gef = upload_gef();
@@ -69,25 +69,25 @@ return [
         same(200, $t->get('/cpt/' . $created->data()['id'], $writer)->status, 'the upload is its account\'s');
     },
 
-    'the rights follow OnWord; a user revoked in the library stays out' => function (): void {
-        $t = new TestApp(['onword' => ['enabled' => true]]);
-        onword_tables($t->pdo);
-        $key = onword_account($t->pdo, 'ann@example.com', 'write', 'office');
+    'the rights follow StructuralDocs; a user revoked in the library stays out' => function (): void {
+        $t = new TestApp(['structuraldocs' => ['enabled' => true]]);
+        structuraldocs_tables($t->pdo);
+        $key = structuraldocs_account($t->pdo, 'ann@example.com', 'write', 'office');
         same(true, $t->get('/', $key)->data()['canWrite']);
-        onword_rights($t->pdo, 'ann@example.com', 'read', 'site-team');
+        structuraldocs_rights($t->pdo, 'ann@example.com', 'read', 'site-team');
         $now = $t->get('/', $key)->data();
         same(false, $now['canWrite']);
         same('site-team', $now['group']);
         same('ann@example.com', $now['user'], 'the user stays the same one');
-        onword_rights($t->pdo, 'ann@example.com', '');
-        same(401, $t->get('/', $key)->status, 'rights taken away in OnWord');
-        onword_rights($t->pdo, 'ann@example.com', 'write');
+        structuraldocs_rights($t->pdo, 'ann@example.com', '');
+        same(401, $t->get('/', $key)->status, 'rights taken away in StructuralDocs');
+        structuraldocs_rights($t->pdo, 'ann@example.com', 'write');
         same(200, $t->get('/', $key)->status);
-        // Removing the key in OnWord ends it here too.
+        // Removing the key in StructuralDocs ends it here too.
         $t->pdo->exec('DELETE FROM access_keys');
         same(401, $t->get('/', $key)->status);
 
-        $other = onword_account($t->pdo, 'dan@example.com', 'write');
+        $other = structuraldocs_account($t->pdo, 'dan@example.com', 'write');
         same(200, $t->get('/', $other)->status);
         $t->keys->revoke('dan@example.com');
         same(401, $t->get('/', $other)->status, 'revoked with bin/keys.php');
@@ -95,25 +95,25 @@ return [
     },
 
     'a name the library already has is not taken over' => function (): void {
-        $t = new TestApp(['onword' => ['enabled' => true]]);
-        onword_tables($t->pdo);
+        $t = new TestApp(['structuraldocs' => ['enabled' => true]]);
+        structuraldocs_tables($t->pdo);
         $own = $t->keys->create('ann@example.com');
-        $key = onword_account($t->pdo, 'ann@example.com', 'read');
+        $key = structuraldocs_account($t->pdo, 'ann@example.com', 'read');
         $name = $t->get('/', $key)->data()['user'];
-        check($name !== 'ann@example.com' && str_starts_with($name, 'ann@example.com-onword'), "a name of its own, got {$name}");
+        check($name !== 'ann@example.com' && str_starts_with($name, 'ann@example.com-sd'), "a name of its own, got {$name}");
         same('ann@example.com', $t->get('/', $own)->data()['user'], 'the library\'s own key still is its own user');
         same(true, $t->get('/', $own)->data()['canWrite']);
     },
 
-    'OnWord keys are refused unless the config switches them on' => function (): void {
+    'StructuralDocs keys are refused unless the config switches them on' => function (): void {
         $t = new TestApp();
-        onword_tables($t->pdo);
-        $key = onword_account($t->pdo, 'ann@example.com', 'write');
+        structuraldocs_tables($t->pdo);
+        $key = structuraldocs_account($t->pdo, 'ann@example.com', 'write');
         same(401, $t->get('/', $key)->status);
         same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM api_users')->fetchColumn());
-        // Switched on without OnWord's tables, a library key works as before.
-        $plain = new TestApp(['onword' => ['enabled' => true]]);
+        // Switched on without StructuralDocs's tables, a library key works as before.
+        $plain = new TestApp(['structuraldocs' => ['enabled' => true]]);
         same('alice', $plain->get('/', $plain->keys->create('alice'))->data()['user']);
-        throws(InvalidArgumentException::class, fn() => new TestApp(['onword' => ['enabled' => true, 'database' => 'a`b']]));
+        throws(InvalidArgumentException::class, fn() => new TestApp(['structuraldocs' => ['enabled' => true, 'database' => 'a`b']]));
     },
 ];
