@@ -147,13 +147,16 @@ php bin/keys.php revoke colleague
 - **Uploading needs a key** that may write, so give one to each person
   whose uploads you trust. A `--read-only` key can see uploads but not add
   any.
-- **OnWord's keys (1.8.0, optional).** When OnWord runs on the same
-  database, add `'onword' => ['enabled' => true]` to `config/config.php`
-  (and `'database' => '<name>'` inside it when OnWord's tables are in
+- **StructuralDocs' keys (1.10.0, optional; OnWord's in 1.8.0).** When
+  StructuralDocs runs on the same database server, add
+  `'structuraldocs' => ['enabled' => true]` to `config/config.php` (and
+  `'database' => '<name>'` inside it when StructuralDocs' tables are in
   another database this user may read). People then use the key they make
-  in OnWord under Programs, and OnWord's administrator sets under Accounts
-  who may read and who may upload. Needs migration
-  `006_onword_accounts.sql` (see *Updating*).
+  in StructuralDocs under Programs (`sd_…`), and StructuralDocs'
+  administrator sets under Groups who may read and who may upload. Needs
+  migrations `006_onword_accounts.sql` and `007_structuraldocs_accounts.sql`,
+  which the library applies itself (see *Updating automatically*). An
+  `'onword'` setting is no longer read.
 - **Groups.** An upload marked `group` is visible to every key in the
   uploader's group, for example one office. Group names are 1–64
   letters, digits, `.`, `_`, `@` and `-`. A user who leaves the group no longer sees its
@@ -274,7 +277,7 @@ Actions → CI → Run workflow uploads the current state by hand.
 - The database is brought up to date by the library itself at the first
   request after an upload; `php bin/migrate.php` is no longer needed. See
   the README → *Updating automatically*.
-- A new setting in `config/config.php` (such as `onword` in 1.8.0) is
+- A new setting in `config/config.php` (such as `structuraldocs` in 1.10.0) is
   still yours to add.
 
 ## Updating by hand
@@ -282,7 +285,7 @@ Actions → CI → Run workflow uploads the current state by hand.
 ```sh
 cd ~/cpt-library
 git pull
-php bin/migrate.php      # 1.2.0 adds 003_public_and_uploads.sql, 1.3.0 adds 004_upload_origin.sql; 1.4.0 has none; 1.5.0 adds 005_borehole_favourites.sql; 1.6.0 and 1.7.0 have none; 1.8.0 adds 006_onword_accounts.sql
+php bin/migrate.php      # 1.2.0 adds 003_public_and_uploads.sql, 1.3.0 adds 004_upload_origin.sql; 1.4.0 has none; 1.5.0 adds 005_borehole_favourites.sql; 1.6.0 and 1.7.0 have none; 1.8.0 adds 006_onword_accounts.sql; 1.9.0 has none; 1.10.0 adds 007_structuraldocs_accounts.sql
 cp public/index.php public/.htaccess ~/domains/structuralcanvas.eu/public_html/cpt-api/   # only if they changed
 php tests/run.php        # optional, against the test database
 ```

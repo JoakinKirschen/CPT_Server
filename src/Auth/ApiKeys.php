@@ -13,31 +13,31 @@ use PDO;
  * A user may belong to a group (1.2.0): group uploads are visible to its
  * members.
  *
- * Since 1.8.0 a key made in OnWord (onw_…) is accepted too, when the
- * config switches that on: OnWord's tables are in the same database (or
+ * Since 1.10.0 a key made in StructuralDocs (sd_…) is accepted too, when the
+ * config switches that on: StructuralDocs's tables are in the same database (or
  * in one this connection may read), its administrator sets per account
  * whether it may read or also upload and its group, and the library
- * keeps a user of its own for the account (api_users.onword_user_id).
- * OnWord stores a key as its plain SHA-256; nothing is written there.
+ * keeps a user of its own for the account (api_users.structuraldocs_user_id).
+ * StructuralDocs stores a key as its plain SHA-256; nothing is written there.
  */
 final class ApiKeys
 {
     public const PREFIX = 'cptlib_';
     private const KEY_PATTERN = '/^cptlib_[A-Za-z0-9]{40}\z/';
     private const NAME_PATTERN = '/^[A-Za-z0-9._@-]{1,64}\z/';
-    private const ONWORD_KEY_PATTERN = '/^onw_[0-9a-f]{40}\z/';
+    private const STRUCTURALDOCS_KEY_PATTERN = '/^sd_[0-9a-f]{40}\z/';
     private const DATABASE_PATTERN = '/^[A-Za-z0-9_]{1,64}\z/';
 
     /**
-     * @param array{enabled?:bool,database?:string}|null $onword accept OnWord's keys; "database" names
+     * @param array{enabled?:bool,database?:string}|null $structuralDocs accept StructuralDocs's keys; "database" names
      *        the database its tables are in when that is not this connection's own
      */
-    public function __construct(private PDO $pdo, private string $pepper, private Clock $clock, private ?array $onword = null)
+    public function __construct(private PDO $pdo, private string $pepper, private Clock $clock, private ?array $structuralDocs = null)
     {
-        if (empty($onword['enabled'])) {
-            $this->onword = null;
-        } elseif (($onword['database'] ?? '') !== '' && preg_match(self::DATABASE_PATTERN, (string)$onword['database']) !== 1) {
-            throw new \InvalidArgumentException('onword.database must be a plain database name.');
+        if (empty($structuralDocs['enabled'])) {
+            $this->structuralDocs = null;
+        } elseif (($structuralDocs['database'] ?? '') !== '' && preg_match(self::DATABASE_PATTERN, (string)$structuralDocs['database']) !== 1) {
+            throw new \InvalidArgumentException('structuraldocs.database must be a plain database name.');
         }
         if (strlen($pepper) < 32) {
             throw new \InvalidArgumentException('The key pepper must be at least 32 characters.');
@@ -62,8 +62,8 @@ final class ApiKeys
     /** The active user for this key, or null. */
     public function authenticate(?string $key): ?User
     {
-        if ($key !== null && $this->onword !== null && preg_match(self::ONWORD_KEY_PATTERN, $key) === 1) {
-            return $this->authenticateOnword($key);
+        if ($key !== null && $this->structuralDocs !== null && preg_match(self::STRUCTURALDOCS_KEY_PATTERN, $key) === 1) {
+            return $this->authenticateStructuralDocs($key);
         }
         if ($key === null || preg_match(self::KEY_PATTERN, $key) !== 1) {
             return null;
@@ -83,14 +83,14 @@ final class ApiKeys
     }
 
     /**
-     * The library's user for the OnWord account this key belongs to, with
-     * the rights OnWord's administrator gave it; null for a key OnWord
+     * The library's user for the StructuralDocs account this key belongs to, with
+     * the rights StructuralDocs's administrator gave it; null for a key StructuralDocs
      * does not have, an account without rights here, or a user revoked
      * in the library.
      */
-    private function authenticateOnword(string $key): ?User
+    private function authenticateStructuralDocs(string $key): ?User
     {
-        $prefix = ($this->onword['database'] ?? '') === '' ? '' : '`' . $this->onword['database'] . '`.';
+        $prefix = ($this->structuralDocs['database'] ?? '') === '' ? '' : '`' . $this->structuralDocs['database'] . '`.';
         $statement = $this->pdo->prepare("SELECT u.id, u.email, u.library, u.library_group FROM {$prefix}access_keys k JOIN {$prefix}users u ON u.id = k.user_id WHERE k.key_hash = ?");
         $statement->execute([hash('sha256', $key)]);
         $account = $statement->fetch();
@@ -99,24 +99,24 @@ final class ApiKeys
         }
         $canWrite = $account['library'] === 'write';
         $group = preg_match(self::NAME_PATTERN, (string)$account['library_group']) === 1 ? (string)$account['library_group'] : null;
-        $row = $this->onwordUser((int)$account['id']);
+        $row = $this->structuralDocsUser((int)$account['id']);
         $now = Clock::sql($this->clock->now());
         if (!$row) {
-            $insert = $this->pdo->prepare('INSERT INTO api_users (name, can_write, group_name, created_at, last_used_at, onword_user_id) VALUES (?, ?, ?, ?, ?, ?)');
+            $insert = $this->pdo->prepare('INSERT INTO api_users (name, can_write, group_name, created_at, last_used_at, structuraldocs_user_id) VALUES (?, ?, ?, ?, ?, ?)');
             try {
-                $insert->execute([$this->onwordName((string)$account['email'], (int)$account['id']), $canWrite ? 1 : 0, $group, $now, $now, (int)$account['id']]);
+                $insert->execute([$this->structuralDocsName((string)$account['email'], (int)$account['id']), $canWrite ? 1 : 0, $group, $now, $now, (int)$account['id']]);
             } catch (\PDOException $e) {
                 if ($e->getCode() !== '23000') {
                     throw $e;
                 }
                 // Another request of the same account made it meanwhile.
             }
-            $row = $this->onwordUser((int)$account['id']);
+            $row = $this->structuralDocsUser((int)$account['id']);
         }
         if (!$row || $row['revoked_at'] !== null) {
             return null;
         }
-        // The rights follow OnWord's; the name stays, so uploads keep their owner's name.
+        // The rights follow StructuralDocs's; the name stays, so uploads keep their owner's name.
         if ((bool)$row['can_write'] !== $canWrite || $row['group_name'] !== $group) {
             $this->pdo->prepare('UPDATE api_users SET can_write = ?, group_name = ? WHERE id = ?')->execute([$canWrite ? 1 : 0, $group, $row['id']]);
         }
@@ -127,20 +127,20 @@ final class ApiKeys
     }
 
     /** @return array<string,mixed>|false */
-    private function onwordUser(int $onwordId): array|false
+    private function structuralDocsUser(int $structuralDocsId): array|false
     {
-        $statement = $this->pdo->prepare('SELECT id, name, can_write, group_name, last_used_at, revoked_at FROM api_users WHERE onword_user_id = ?');
-        $statement->execute([$onwordId]);
+        $statement = $this->pdo->prepare('SELECT id, name, can_write, group_name, last_used_at, revoked_at FROM api_users WHERE structuraldocs_user_id = ?');
+        $statement->execute([$structuralDocsId]);
         return $statement->fetch();
     }
 
     /** A user name from the account's address; with the account's number when the name is taken. */
-    private function onwordName(string $email, int $onwordId): string
+    private function structuralDocsName(string $email, int $structuralDocsId): string
     {
         $name = substr((string)preg_replace('/[^A-Za-z0-9._@-]/', '_', $email), 0, 64);
         $taken = $this->pdo->prepare('SELECT COUNT(*) FROM api_users WHERE name = ?');
         $taken->execute([$name]);
-        return $name !== '' && (int)$taken->fetchColumn() === 0 ? $name : substr($name, 0, 50) . '-onword' . $onwordId;
+        return $name !== '' && (int)$taken->fetchColumn() === 0 ? $name : substr($name, 0, 50) . '-sd' . $structuralDocsId;
     }
 
     /** Creates the user with a new key. @return string the key (show once) */
