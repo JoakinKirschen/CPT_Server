@@ -33,6 +33,13 @@ final class Config
             // Only when the site sits behind a proxy that sets it.
             'trust_forwarded_proto' => false,
         ],
+        'onword' => [
+            // Accept keys made in OnWord (onw_…) as library keys (1.8.0).
+            // OnWord's tables must be readable through this connection.
+            'enabled' => false,
+            // The database OnWord's tables are in, when not this one.
+            'database' => '',
+        ],
         'public' => [
             // DOV CPTs, boreholes and interpretations without a key (1.2.0):
             // DOV data is open data. Uploads always need a key.

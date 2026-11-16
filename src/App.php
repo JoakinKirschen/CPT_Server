@@ -70,7 +70,7 @@ final class App
         private Logger $logger,
     ) {
         $this->cors = new Cors((array)$config->get('api.allowed_origins'));
-        $this->keys = new ApiKeys($pdo, (string)$config->get('api.key_pepper'), $clock);
+        $this->keys = new ApiKeys($pdo, (string)$config->get('api.key_pepper'), $clock, (array)$config->get('onword'));
         $this->limiter = new RateLimiter($pdo, $clock);
         $this->privateCpts = new PrivateCptRepository($pdo);
         $this->favourites = new BoreholeFavourites($pdo);
