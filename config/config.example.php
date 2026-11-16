@@ -13,6 +13,9 @@ return [
         'name' => 'USER_cptlib',        // DirectAdmin prefixes the account name
         'user' => 'USER_cptlib',
         'pass' => 'CHANGE-ME',
+        // The library applies pending migrations itself at the first request of
+        // a new version (1.9.0). false: only bin/migrate.php does.
+        // 'auto_migrate' => true,
     ],
 
     'api' => [

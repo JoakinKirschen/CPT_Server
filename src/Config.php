@@ -18,6 +18,9 @@ final class Config
             'name' => '',
             'user' => '',
             'pass' => '',
+            // Apply pending migrations at the first request of a new
+            // version (1.9.0), so an upload needs no command on the host.
+            'auto_migrate' => true,
         ],
         'api' => [
             // Path where public/index.php is served, e.g. '/cpt-api'.

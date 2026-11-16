@@ -9,6 +9,8 @@ use PDO;
 /** Applies migrations/NNN_name.sql files in order, each once. */
 final class Migrator
 {
+    private const LOCK = 'cptlib_migrate';
+
     public function __construct(private PDO $pdo, private string $directory, private Clock $clock)
     {
     }
@@ -30,6 +32,42 @@ final class Migrator
             $applied[] = $version;
         }
         return $applied;
+    }
+
+    /**
+     * Applies the pending migrations once per version of the code (1.9.0):
+     * an uploaded release brings its migrations along, and the first
+     * request it serves applies them before anything reads the new
+     * schema. A marker file in $stateDir says the version is done, so
+     * every later request costs one look at a file. A database lock keeps
+     * two requests from migrating at once: the second waits for the first,
+     * at most $waitSeconds, and then finds nothing pending.
+     * @return list<string> versions applied now
+     */
+    public function ensure(string $codeVersion, string $stateDir, int $waitSeconds = 20): array
+    {
+        $marker = $stateDir . '/schema-' . preg_replace('/[^A-Za-z0-9._-]/', '_', $codeVersion) . '.ok';
+        if (is_file($marker)) {
+            return [];
+        }
+        $lock = $this->pdo->prepare('SELECT GET_LOCK(?, ?)');
+        $lock->execute([self::LOCK, $waitSeconds]);
+        if ((int)$lock->fetchColumn() !== 1) {
+            throw new \RuntimeException('Another request is still applying the migrations.');
+        }
+        try {
+            $applied = $this->migrate();
+            if (!is_dir($stateDir)) {
+                @mkdir($stateDir, 0700, true);
+            }
+            if (@file_put_contents($marker, implode("\n", $applied) . "\n") === false) {
+                // Without the marker every request looks again: slower, still correct.
+                error_log('CPT library: cannot write ' . $marker);
+            }
+            return $applied;
+        } finally {
+            $this->pdo->prepare('SELECT RELEASE_LOCK(?)')->execute([self::LOCK]);
+        }
     }
 
     /** @return array<string,string> version => file, not yet applied */

@@ -6,3 +6,5 @@ vendor/
 *.log
 .env
 tests/config.test.php
+# The folders tools/package-upload.sh makes
+dist/
