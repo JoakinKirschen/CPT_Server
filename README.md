@@ -393,9 +393,18 @@ StructuralDocs's keys, so that people need one key, made by themselves:
   (`api_users.structuraldocs_user_id`), named by the account's address, so that
   uploads and favourite marks have an owner. Its rights and group follow
   StructuralDocs's at every request. It holds no key: StructuralDocs's is only compared.
-- An account without rights in the library, a key removed in StructuralDocs, and
-  a user revoked here (`php bin/keys.php revoke <name>`) are refused with
-  401, like any wrong key. The library never writes to StructuralDocs's tables.
+- An account without rights in the library, a key removed in StructuralDocs, a
+  key StructuralDocs has let expire, and a user revoked here (`php bin/keys.php
+  revoke <name>`) are refused with 401, like any wrong key. The library never
+  writes to StructuralDocs's tables.
+- Since 1.11.0 (StructuralDocs 2.16.0): a key StructuralDocs makes when a program
+  signs in ("Structural Canvas (signed in)") ends 180 days after its last use
+  in StructuralDocs (`access_keys.expires_at`, in milliseconds); past it the
+  library refuses it too. A key made by hand in StructuralDocs has no end. Using
+  the key here does not move its end, because the library writes nothing to
+  StructuralDocs's tables; Structural Canvas uses the same key with StructuralDocs, which
+  does. A StructuralDocs before 2.16.0 has no such column, and its keys are read
+  as before.
 - Keys made with `bin/keys.php` (`cptlib_…`) keep working as before.
 
 In Structural Canvas the StructuralDocs key goes in Settings → Online → CPT
@@ -555,6 +564,7 @@ accounts and leaves the others alone.
 `tests/StructuralDocsTest.php` (1.8.0, renamed in 1.10.0) makes StructuralDocs's two tables in the test
 database and checks its keys: the rights and the group, a reader that may
 not upload, rights changed or taken away in StructuralDocs, a key removed there,
+a key StructuralDocs let expire (1.11.0, with and without its `expires_at` column),
 a user revoked here, a name the library already has, and that nothing is
 accepted unless the config switches it on.
 

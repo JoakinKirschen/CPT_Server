@@ -94,6 +94,25 @@ return [
         same(1, (int)$t->pdo->query("SELECT COUNT(*) FROM api_users WHERE name = 'dan@example.com'")->fetchColumn());
     },
 
+    'a key StructuralDocs (2.16.0) let expire is refused here too; one without an end is not (1.11.0)' => function (): void {
+        $t = new TestApp(['structuraldocs' => ['enabled' => true]]);
+        structuraldocs_tables($t->pdo);
+        // Before StructuralDocs 2.16.0 there is no expires_at: keys are read as before.
+        $key = structuraldocs_account($t->pdo, 'ann@example.com', 'write');
+        same(200, $t->get('/', $key)->status, 'a StructuralDocs without expires_at');
+        $t->pdo->exec('ALTER TABLE access_keys ADD COLUMN expires_at BIGINT NULL');
+        // StructuralDocs upgraded: the next request (a new process on the host) reads the end.
+        $t->app = new CptLibrary\App($t->config, $t->pdo, $t->clock, $t->dov, new CptLibrary\Logger(test_log_dir(), $t->clock));
+        $t2 = $t;
+        $now = $t2->clock->now()->getTimestamp() * 1000;
+        same(200, $t2->get('/', $key)->status, 'a key made by hand has no end');
+        $t2->pdo->prepare('UPDATE access_keys SET expires_at = ?')->execute([$now + 60000]);
+        same(200, $t2->get('/', $key)->status, 'a signed-in key before its end');
+        $t2->pdo->prepare('UPDATE access_keys SET expires_at = ?')->execute([$now - 1]);
+        same(401, $t2->get('/', $key)->status, 'a signed-in key past its end');
+        same(0, (int)$t2->pdo->query('SELECT COUNT(*) FROM access_keys WHERE expires_at > ' . $now)->fetchColumn(), 'the library writes nothing to StructuralDocs\'s tables');
+    },
+
     'a name the library already has is not taken over' => function (): void {
         $t = new TestApp(['structuraldocs' => ['enabled' => true]]);
         structuraldocs_tables($t->pdo);

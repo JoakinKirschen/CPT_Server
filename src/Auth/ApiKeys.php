@@ -19,6 +19,11 @@ use PDO;
  * whether it may read or also upload and its group, and the library
  * keeps a user of its own for the account (api_users.structuraldocs_user_id).
  * StructuralDocs stores a key as its plain SHA-256; nothing is written there.
+ *
+ * Since 1.11.0 a key StructuralDocs made by signing in a program has an end
+ * (access_keys.expires_at, StructuralDocs 2.16.0, in milliseconds); past it the
+ * key is refused here as StructuralDocs refuses it. A StructuralDocs before 2.16.0
+ * has no such column: its keys are read as before.
  */
 final class ApiKeys
 {
@@ -27,6 +32,11 @@ final class ApiKeys
     private const NAME_PATTERN = '/^[A-Za-z0-9._@-]{1,64}\z/';
     private const STRUCTURALDOCS_KEY_PATTERN = '/^sd_[0-9a-f]{40}\z/';
     private const DATABASE_PATTERN = '/^[A-Za-z0-9_]{1,64}\z/';
+    /** MySQL's SQLSTATE for a column the table does not have. */
+    private const UNKNOWN_COLUMN = '42S22';
+
+    /** Whether StructuralDocs's access_keys has expires_at; null until asked. */
+    private ?bool $structuralDocsExpiry = null;
 
     /**
      * @param array{enabled?:bool,database?:string}|null $structuralDocs accept StructuralDocs's keys; "database" names
@@ -90,11 +100,12 @@ final class ApiKeys
      */
     private function authenticateStructuralDocs(string $key): ?User
     {
-        $prefix = ($this->structuralDocs['database'] ?? '') === '' ? '' : '`' . $this->structuralDocs['database'] . '`.';
-        $statement = $this->pdo->prepare("SELECT u.id, u.email, u.library, u.library_group FROM {$prefix}access_keys k JOIN {$prefix}users u ON u.id = k.user_id WHERE k.key_hash = ?");
-        $statement->execute([hash('sha256', $key)]);
-        $account = $statement->fetch();
+        $account = $this->structuralDocsAccount(hash('sha256', $key));
         if (!$account || !in_array($account['library'], ['read', 'write'], true)) {
+            return null;
+        }
+        // A sign-in StructuralDocs has let lapse ends here too (StructuralDocs keeps the time in ms).
+        if (($account['expires_at'] ?? null) !== null && (int)$account['expires_at'] < $this->clock->now()->getTimestamp() * 1000) {
             return null;
         }
         $canWrite = $account['library'] === 'write';
@@ -124,6 +135,33 @@ final class ApiKeys
             $this->pdo->prepare('UPDATE api_users SET last_used_at = ? WHERE id = ?')->execute([$now, $row['id']]);
         }
         return new User((int)$row['id'], (string)$row['name'], $canWrite, $group);
+    }
+
+    /**
+     * The StructuralDocs account of a key's hash, with the key's end (null: none),
+     * or false. Read without the end from a StructuralDocs that has no such column.
+     * @return array<string,mixed>|false
+     */
+    private function structuralDocsAccount(string $hash): array|false
+    {
+        $prefix = ($this->structuralDocs['database'] ?? '') === '' ? '' : '`' . $this->structuralDocs['database'] . '`.';
+        $columns = 'u.id, u.email, u.library, u.library_group';
+        if ($this->structuralDocsExpiry !== false) {
+            try {
+                $statement = $this->pdo->prepare("SELECT {$columns}, k.expires_at FROM {$prefix}access_keys k JOIN {$prefix}users u ON u.id = k.user_id WHERE k.key_hash = ?");
+                $statement->execute([$hash]);
+                $this->structuralDocsExpiry = true;
+                return $statement->fetch();
+            } catch (\PDOException $e) {
+                if ($e->getCode() !== self::UNKNOWN_COLUMN) {
+                    throw $e;
+                }
+                $this->structuralDocsExpiry = false;
+            }
+        }
+        $statement = $this->pdo->prepare("SELECT {$columns} FROM {$prefix}access_keys k JOIN {$prefix}users u ON u.id = k.user_id WHERE k.key_hash = ?");
+        $statement->execute([$hash]);
+        return $statement->fetch();
     }
 
     /** @return array<string,mixed>|false */
