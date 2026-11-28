@@ -28,6 +28,13 @@ use PDO;
  * Since 1.12.0 a refusal names its reason (check(), the REFUSED_* codes), so
  * that the person refused is told what to change: before, every refusal read
  * alike, and a key refused for want of rights looked like one that expired.
+ *
+ * Since 1.13.0 a key StructuralDocs's administrator made for the library
+ * (sdlib_…, StructuralDocs 2.19.0, table library_keys) is accepted too, under
+ * the same setting: it belongs to no account but to a group there, whose
+ * rights StructuralDocs writes on the key's row as it does on an account's.
+ * The library keeps a user of its own for it (api_users.structuraldocs_key_id).
+ * A StructuralDocs before 2.19.0 has no such table: its keys are unknown here.
  */
 final class ApiKeys
 {
@@ -35,6 +42,7 @@ final class ApiKeys
     private const KEY_PATTERN = '/^cptlib_[A-Za-z0-9]{40}\z/';
     private const NAME_PATTERN = '/^[A-Za-z0-9._@-]{1,64}\z/';
     private const STRUCTURALDOCS_KEY_PATTERN = '/^sd_[0-9a-f]{40}\z/';
+    private const STRUCTURALDOCS_LIBRARY_KEY_PATTERN = '/^sdlib_[0-9a-f]{40}\z/';
     private const DATABASE_PATTERN = '/^[A-Za-z0-9_]{1,64}\z/';
     /** Why a key was refused (1.12.0): sent as `reason` with the 401. */
     public const REFUSED_UNKNOWN = 'unknown_key';
@@ -44,6 +52,11 @@ final class ApiKeys
     public const REFUSED_REVOKED = 'key_revoked';
     /** MySQL's SQLSTATE for a column the table does not have. */
     private const UNKNOWN_COLUMN = '42S22';
+    /** MySQL's SQLSTATE for a table the database does not have. */
+    private const UNKNOWN_TABLE = '42S02';
+    /** The columns of api_users that name what of StructuralDocs a user stands for: an account, or a key. */
+    private const ACCOUNT = 'structuraldocs_user_id';
+    private const KEY = 'structuraldocs_key_id';
 
     /** Whether StructuralDocs's access_keys has expires_at; null until asked. */
     private ?bool $structuralDocsExpiry = null;
@@ -92,6 +105,9 @@ final class ApiKeys
         if ($key !== null && preg_match(self::STRUCTURALDOCS_KEY_PATTERN, $key) === 1) {
             return $this->structuralDocs === null ? self::REFUSED_NOT_ACCEPTED : $this->authenticateStructuralDocs($key);
         }
+        if ($key !== null && preg_match(self::STRUCTURALDOCS_LIBRARY_KEY_PATTERN, $key) === 1) {
+            return $this->structuralDocs === null ? self::REFUSED_NOT_ACCEPTED : $this->authenticateStructuralDocsKey($key);
+        }
         if ($key === null || preg_match(self::KEY_PATTERN, $key) !== 1) {
             return self::REFUSED_UNKNOWN;
         }
@@ -126,24 +142,60 @@ final class ApiKeys
         if (($account['expires_at'] ?? null) !== null && (int)$account['expires_at'] < $this->clock->now()->getTimestamp() * 1000) {
             return self::REFUSED_EXPIRED;
         }
-        if (!in_array($account['library'], ['read', 'write'], true)) {
+        return $this->structuralDocsUserFor(self::ACCOUNT, (int)$account['id'], $account, (string)$account['email']);
+    }
+
+    /**
+     * The library's user for a key StructuralDocs's administrator made for the
+     * library (1.13.0), with the rights of the key's group there; otherwise why
+     * not: a key StructuralDocs does not have (or a StructuralDocs without such
+     * keys), one in no group or in a group without rights here, or a user
+     * revoked in the library.
+     */
+    private function authenticateStructuralDocsKey(string $key): User|string
+    {
+        $prefix = $this->structuralDocsPrefix();
+        try {
+            $statement = $this->pdo->prepare("SELECT id, name, library, library_group FROM {$prefix}library_keys WHERE key_hash = ?");
+            $statement->execute([hash('sha256', $key)]);
+        } catch (\PDOException $e) {
+            if ($e->getCode() !== self::UNKNOWN_TABLE) {
+                throw $e;
+            }
+            return self::REFUSED_UNKNOWN; // a StructuralDocs before 2.19.0
+        }
+        $row = $statement->fetch();
+        return $row ? $this->structuralDocsUserFor(self::KEY, (int)$row['id'], $row, (string)$row['name']) : self::REFUSED_UNKNOWN;
+    }
+
+    /**
+     * The library's user that stands for an account or a key of StructuralDocs
+     * ($column), made at its first request and named after $name, with the
+     * rights StructuralDocs gives it ($rights: library, library_group).
+     * @param self::ACCOUNT|self::KEY $column
+     * @param array<string,mixed> $rights
+     */
+    private function structuralDocsUserFor(string $column, int $structuralDocsId, array $rights, string $name): User|string
+    {
+        if (!in_array($rights['library'], ['read', 'write'], true)) {
             return self::REFUSED_NO_RIGHTS;
         }
-        $canWrite = $account['library'] === 'write';
-        $group = preg_match(self::NAME_PATTERN, (string)$account['library_group']) === 1 ? (string)$account['library_group'] : null;
-        $row = $this->structuralDocsUser((int)$account['id']);
+        $canWrite = $rights['library'] === 'write';
+        $group = preg_match(self::NAME_PATTERN, (string)$rights['library_group']) === 1 ? (string)$rights['library_group'] : null;
+        $row = $this->structuralDocsUser($column, $structuralDocsId);
         $now = Clock::sql($this->clock->now());
         if (!$row) {
-            $insert = $this->pdo->prepare('INSERT INTO api_users (name, can_write, group_name, created_at, last_used_at, structuraldocs_user_id) VALUES (?, ?, ?, ?, ?, ?)');
+            $suffix = $column === self::KEY ? '-sdk' : '-sd';
+            $insert = $this->pdo->prepare("INSERT INTO api_users (name, can_write, group_name, created_at, last_used_at, {$column}) VALUES (?, ?, ?, ?, ?, ?)");
             try {
-                $insert->execute([$this->structuralDocsName((string)$account['email'], (int)$account['id']), $canWrite ? 1 : 0, $group, $now, $now, (int)$account['id']]);
+                $insert->execute([$this->structuralDocsName($name, $suffix . $structuralDocsId), $canWrite ? 1 : 0, $group, $now, $now, $structuralDocsId]);
             } catch (\PDOException $e) {
                 if ($e->getCode() !== '23000') {
                     throw $e;
                 }
-                // Another request of the same account made it meanwhile.
+                // Another request of the same account or key made it meanwhile.
             }
-            $row = $this->structuralDocsUser((int)$account['id']);
+            $row = $this->structuralDocsUser($column, $structuralDocsId);
         }
         if (!$row) {
             return self::REFUSED_UNKNOWN;
@@ -161,6 +213,12 @@ final class ApiKeys
         return new User((int)$row['id'], (string)$row['name'], $canWrite, $group);
     }
 
+    /** The database StructuralDocs's tables are in, as a prefix of their names; empty for this connection's own. */
+    private function structuralDocsPrefix(): string
+    {
+        return ($this->structuralDocs['database'] ?? '') === '' ? '' : '`' . $this->structuralDocs['database'] . '`.';
+    }
+
     /**
      * The StructuralDocs account of a key's hash, with the key's end (null: none),
      * or false. Read without the end from a StructuralDocs that has no such column.
@@ -168,7 +226,7 @@ final class ApiKeys
      */
     private function structuralDocsAccount(string $hash): array|false
     {
-        $prefix = ($this->structuralDocs['database'] ?? '') === '' ? '' : '`' . $this->structuralDocs['database'] . '`.';
+        $prefix = $this->structuralDocsPrefix();
         $columns = 'u.id, u.email, u.library, u.library_group';
         if ($this->structuralDocsExpiry !== false) {
             try {
@@ -188,21 +246,24 @@ final class ApiKeys
         return $statement->fetch();
     }
 
-    /** @return array<string,mixed>|false */
-    private function structuralDocsUser(int $structuralDocsId): array|false
+    /**
+     * @param self::ACCOUNT|self::KEY $column
+     * @return array<string,mixed>|false
+     */
+    private function structuralDocsUser(string $column, int $structuralDocsId): array|false
     {
-        $statement = $this->pdo->prepare('SELECT id, name, can_write, group_name, last_used_at, revoked_at FROM api_users WHERE structuraldocs_user_id = ?');
+        $statement = $this->pdo->prepare("SELECT id, name, can_write, group_name, last_used_at, revoked_at FROM api_users WHERE {$column} = ?");
         $statement->execute([$structuralDocsId]);
         return $statement->fetch();
     }
 
-    /** A user name from the account's address; with the account's number when the name is taken. */
-    private function structuralDocsName(string $email, int $structuralDocsId): string
+    /** A user name from the account's address or the key's name; with $suffix (its number) when the name is taken. */
+    private function structuralDocsName(string $wanted, string $suffix): string
     {
-        $name = substr((string)preg_replace('/[^A-Za-z0-9._@-]/', '_', $email), 0, 64);
+        $name = substr((string)preg_replace('/[^A-Za-z0-9._@-]/', '_', $wanted), 0, 64);
         $taken = $this->pdo->prepare('SELECT COUNT(*) FROM api_users WHERE name = ?');
         $taken->execute([$name]);
-        return $name !== '' && (int)$taken->fetchColumn() === 0 ? $name : substr($name, 0, 50) . '-sd' . $structuralDocsId;
+        return $name !== '' && (int)$taken->fetchColumn() === 0 ? $name : substr($name, 0, 50) . $suffix;
     }
 
     /** Creates the user with a new key. @return string the key (show once) */

@@ -317,10 +317,10 @@ message says what to change and who can change it:
 | `reason` | The key |
 |---|---|
 | `unknown_key` | is not one the library or StructuralDocs has: removed, revoked with `bin/keys.php` (a revoked key's hash is cleared), or not typed in full |
-| `structuraldocs_off` | is a StructuralDocs key (`sd_…`) and the config does not switch them on; the message says when the config still has the `'onword'` setting of before 1.10.0 |
-| `no_library_rights` | belongs to a StructuralDocs account whose group gives no read or upload rights in the library |
+| `structuraldocs_off` | is a StructuralDocs key (`sd_…`, or `sdlib_…` since 1.13.0) and the config does not switch them on; the message says when the config still has the `'onword'` setting of before 1.10.0 |
+| `no_library_rights` | belongs to a StructuralDocs account, or is a StructuralDocs library key (1.13.0), whose group gives no read or upload rights in the library (a key in no group included) |
 | `key_expired` | is a sign-in StructuralDocs let expire (1.11.0) |
-| `key_revoked` | belongs to a StructuralDocs account whose user here was revoked with `bin/keys.php` |
+| `key_revoked` | belongs to a StructuralDocs account, or is a StructuralDocs library key, whose user here was revoked with `bin/keys.php` |
 
 ## Security
 
@@ -417,6 +417,19 @@ StructuralDocs's keys, so that people need one key, made by themselves:
   StructuralDocs's tables; Structural Canvas uses the same key with StructuralDocs, which
   does. A StructuralDocs before 2.16.0 has no such column, and its keys are read
   as before.
+- Since 1.13.0 (StructuralDocs 2.19.0): StructuralDocs's administrator can also
+  make keys for the library that belong to no account, under Administration →
+  **CPT library keys** (`sdlib_…`), for a computer or someone without an account
+  there. Each is in one of StructuralDocs's groups and has that group's rights
+  and group name, which StructuralDocs writes on the key's row (table
+  `library_keys`: `id`, `name`, `key_hash` as the plain SHA-256, `library`,
+  `library_group`). The library keeps a user of its own for each such key
+  (`api_users.structuraldocs_key_id`, migration 008), named after the key
+  (with `-sdk` and its number when the name is taken); its rights follow
+  StructuralDocs's at every request. A key in no group is refused
+  (`no_library_rights`), one deleted there is unknown, and one revoked here
+  (`php bin/keys.php revoke <name>`) is refused like an account's. A
+  StructuralDocs before 2.19.0 has no such table, and these keys are unknown.
 - Keys made with `bin/keys.php` (`cptlib_…`) keep working as before.
 
 In Structural Canvas the StructuralDocs key goes in Settings → Online → CPT
@@ -579,7 +592,12 @@ not upload, rights changed or taken away in StructuralDocs, a key removed there,
 a key StructuralDocs let expire (1.11.0, with and without its `expires_at` column),
 a user revoked here, a name the library already has, that nothing is
 accepted unless the config switches it on, and (1.12.0) the `reason` of each
-refusal, with the message for a config that still has `'onword'`.
+refusal, with the message for a config that still has `'onword'`. Since 1.13.0
+it also makes `library_keys` and checks the keys StructuralDocs's administrator
+makes for the library: their group's rights, a group upload seen by an
+account of the same group, rights that follow, a key in no group, deleted or
+revoked, a name already taken, a StructuralDocs without the table, and the
+setting that switches them off.
 
 The tests cover id validation, the DOV-only URL rule, redirects,
 authentication, key hashing and revocation, rate limits, revisions, the

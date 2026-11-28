@@ -32,6 +32,8 @@ return [
     // Keys made in StructuralDocs (sd_…) as library keys (1.10.0): only when StructuralDocs's
     // tables are in this database, or in 'database' on the same server and
     // readable by this user. StructuralDocs's administrator sets each account's rights.
+    // Since 1.13.0 this also accepts the keys its administrator makes for the
+    // library (sdlib_…), with the rights of their group there.
     'structuraldocs' => [
         'enabled' => false,
         // 'database' => 'USER_structuraldocs',
