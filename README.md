@@ -299,7 +299,7 @@ contains stack traces, SQL or file paths. A 500 response also carries a
 | Status | Codes |
 |---|---|
 | 400 | `invalid_id`, `invalid_ids`, `invalid_path`, `invalid_near`, `invalid_radius`, `invalid_revision`, `invalid_body` |
-| 401 | `unauthorized` (no key where one is needed, or an invalid key) |
+| 401 | `unauthorized` (no key where one is needed, or an invalid key; a key that was refused also gives `reason`, below) |
 | 403 | `https_required`, `forbidden` |
 | 404 | `not_found` |
 | 405 | `method_not_allowed` |
@@ -310,6 +310,17 @@ contains stack traces, SQL or file paths. A 500 response also carries a
 | 502 | `upstream_unavailable`, `upstream_invalid`, `upstream_redirect`, `upstream_too_large` |
 | 503 | `busy`, `database_unavailable` |
 | 507 | `storage_full`: the database reached `storage.max_database_mb`. Stored objects are still served. |
+
+Since 1.12.0 a key that was sent and refused names why, in `reason`, and the
+message says what to change and who can change it:
+
+| `reason` | The key |
+|---|---|
+| `unknown_key` | is not one the library or StructuralDocs has: removed, revoked with `bin/keys.php` (a revoked key's hash is cleared), or not typed in full |
+| `structuraldocs_off` | is a StructuralDocs key (`sd_…`) and the config does not switch them on; the message says when the config still has the `'onword'` setting of before 1.10.0 |
+| `no_library_rights` | belongs to a StructuralDocs account whose group gives no read or upload rights in the library |
+| `key_expired` | is a sign-in StructuralDocs let expire (1.11.0) |
+| `key_revoked` | belongs to a StructuralDocs account whose user here was revoked with `bin/keys.php` |
 
 ## Security
 
@@ -396,7 +407,8 @@ StructuralDocs's keys, so that people need one key, made by themselves:
 - An account without rights in the library, a key removed in StructuralDocs, a
   key StructuralDocs has let expire, and a user revoked here (`php bin/keys.php
   revoke <name>`) are refused with 401, like any wrong key. The library never
-  writes to StructuralDocs's tables.
+  writes to StructuralDocs's tables. Since 1.12.0 the 401 names which of these it
+  was (`reason`, see *Errors*).
 - Since 1.11.0 (StructuralDocs 2.16.0): a key StructuralDocs makes when a program
   signs in ("Structural Canvas (signed in)") ends 180 days after its last use
   in StructuralDocs (`access_keys.expires_at`, in milliseconds); past it the
@@ -565,8 +577,9 @@ accounts and leaves the others alone.
 database and checks its keys: the rights and the group, a reader that may
 not upload, rights changed or taken away in StructuralDocs, a key removed there,
 a key StructuralDocs let expire (1.11.0, with and without its `expires_at` column),
-a user revoked here, a name the library already has, and that nothing is
-accepted unless the config switches it on.
+a user revoked here, a name the library already has, that nothing is
+accepted unless the config switches it on, and (1.12.0) the `reason` of each
+refusal, with the message for a config that still has `'onword'`.
 
 The tests cover id validation, the DOV-only URL rule, redirects,
 authentication, key hashing and revocation, rate limits, revisions, the

@@ -194,6 +194,19 @@ final class Config
         return $value;
     }
 
+    /** Whether the config has this key, a default or one of the host's own (also a setting no longer read). */
+    public function has(string $path): bool
+    {
+        $value = $this->values;
+        foreach (explode('.', $path) as $part) {
+            if (!is_array($value) || !array_key_exists($part, $value)) {
+                return false;
+            }
+            $value = $value[$part];
+        }
+        return true;
+    }
+
     public function int(string $path): int
     {
         return (int)$this->get($path);

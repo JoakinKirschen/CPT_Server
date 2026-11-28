@@ -113,6 +113,58 @@ return [
         same(0, (int)$t2->pdo->query('SELECT COUNT(*) FROM access_keys WHERE expires_at > ' . $now)->fetchColumn(), 'the library writes nothing to StructuralDocs\'s tables');
     },
 
+    'a refused key is told why (1.12.0)' => function (): void {
+        $refusal = function (TestApp $t, string $key): array {
+            $response = $t->get('/', $key);
+            same(401, $response->status);
+            same('unauthorized', $response->data()['error'], 'the code stays the same for older programs');
+            return $response->data();
+        };
+        $t = new TestApp(['structuraldocs' => ['enabled' => true]]);
+        structuraldocs_tables($t->pdo);
+        $t->pdo->exec('ALTER TABLE access_keys ADD COLUMN expires_at BIGINT NULL');
+        $nobody = structuraldocs_account($t->pdo, 'cas@example.com');
+        $refused = $refusal($t, $nobody);
+        same('no_library_rights', $refused['reason'], 'an account without rights in the library');
+        check(str_contains($refused['message'], 'Administration → Groups'), 'says where the rights are given');
+        same('unknown_key', $refusal($t, 'sd_' . str_repeat('0', 40))['reason'], 'a key StructuralDocs does not have');
+        same('unknown_key', $refusal($t, 'cptlib_' . str_repeat('A', 40))['reason'], 'a library key it does not have');
+        same('unknown_key', $refusal($t, 'sd_short')['reason'], 'not a key at all');
+
+        $key = structuraldocs_account($t->pdo, 'ann@example.com', 'write');
+        $now = $t->clock->now()->getTimestamp() * 1000;
+        $t->pdo->prepare('UPDATE access_keys SET expires_at = ? WHERE user_id = (SELECT id FROM users WHERE email = ?)')->execute([$now - 1, 'ann@example.com']);
+        same('key_expired', $refusal($t, $key)['reason'], 'a sign-in StructuralDocs let expire');
+        $t->pdo->exec('UPDATE access_keys SET expires_at = NULL');
+        same(200, $t->get('/', $key)->status);
+        $t->keys->revoke('ann@example.com');
+        same('key_revoked', $refusal($t, $key)['reason'], 'a user revoked with bin/keys.php');
+
+        $own = $t->keys->create('bea');
+        $t->keys->revoke('bea');
+        same('unknown_key', $refusal($t, $own)['reason'], 'a revoked library key is no longer known');
+
+        $missing = $t->postJson('/cpt', null, []);
+        same(401, $missing->status);
+        same(false, array_key_exists('reason', $missing->data()), 'no key sent: nothing was refused');
+    },
+
+    'a StructuralDocs key at a library that does not accept them names the setting (1.12.0)' => function (): void {
+        $off = new TestApp();
+        structuraldocs_tables($off->pdo);
+        $key = structuraldocs_account($off->pdo, 'ann@example.com', 'write');
+        $data = $off->get('/', $key)->data();
+        same('structuraldocs_off', $data['reason']);
+        check(str_contains($data['message'], "'structuraldocs' => ['enabled' => true]"), 'names the setting: ' . $data['message']);
+        // A host whose config.php still has OnWord's setting, which 1.10.0 no longer reads.
+        $old = new TestApp(['onword' => ['enabled' => true]]);
+        structuraldocs_tables($old->pdo);
+        $key = structuraldocs_account($old->pdo, 'ann@example.com', 'write');
+        $data = $old->get('/', $key)->data();
+        same('structuraldocs_off', $data['reason']);
+        check(str_contains($data['message'], "still has the setting 'onword'"), 'names the old setting: ' . $data['message']);
+    },
+
     'a name the library already has is not taken over' => function (): void {
         $t = new TestApp(['structuraldocs' => ['enabled' => true]]);
         structuraldocs_tables($t->pdo);

@@ -184,8 +184,8 @@ final class App
         if (($key === null || trim($key) === '') && $this->config->get('public.enabled')) {
             return null;
         }
-        $user = $this->keys->authenticate($key);
-        if ($user !== null) {
+        $user = $this->keys->check($key);
+        if ($user instanceof User) {
             return $user;
         }
         // Slows down key guessing from one address.
@@ -193,7 +193,26 @@ final class App
         if ($retry !== null) {
             throw new HttpError(429, 'rate_limited', 'Too many failed attempts; try again later.', ['Retry-After' => (string)$retry], ['retryAfter' => $retry]);
         }
-        throw new HttpError(401, 'unauthorized', 'A valid X-Api-Key header is required.');
+        if ($key === null || trim($key) === '') {
+            throw new HttpError(401, 'unauthorized', 'A valid X-Api-Key header is required.');
+        }
+        throw new HttpError(401, 'unauthorized', $this->refusal($user), [], ['reason' => $user]);
+    }
+
+    /**
+     * What a refused key's holder is told (1.12.0): the reason, and who can change it. The code stays
+     * `unauthorized`; `reason` (ApiKeys::REFUSED_*) tells a program which.
+     */
+    private function refusal(string $reason): string
+    {
+        return match ($reason) {
+            ApiKeys::REFUSED_NOT_ACCEPTED => 'This library does not accept StructuralDocs keys: its config.php does not switch them on'
+                . ($this->config->has('onword') ? " (it still has the setting 'onword', which is named 'structuraldocs' since 1.10.0)." : " ('structuraldocs' => ['enabled' => true])."),
+            ApiKeys::REFUSED_NO_RIGHTS => 'This StructuralDocs account may not use the CPT library: StructuralDocs\'s administrator gives it read or upload rights through its group (Administration → Groups).',
+            ApiKeys::REFUSED_EXPIRED => 'This sign-in to StructuralDocs has ended: it was not used for a long time. Sign in again.',
+            ApiKeys::REFUSED_REVOKED => 'This account\'s access to the library was revoked by the library\'s administrator.',
+            default => 'The library does not know this key: it was removed, or it is not typed in full.',
+        };
     }
 
     private function limitRequests(?User $user, Request $request): void
