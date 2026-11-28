@@ -24,6 +24,10 @@ use PDO;
  * (access_keys.expires_at, StructuralDocs 2.16.0, in milliseconds); past it the
  * key is refused here as StructuralDocs refuses it. A StructuralDocs before 2.16.0
  * has no such column: its keys are read as before.
+ *
+ * Since 1.12.0 a refusal names its reason (check(), the REFUSED_* codes), so
+ * that the person refused is told what to change: before, every refusal read
+ * alike, and a key refused for want of rights looked like one that expired.
  */
 final class ApiKeys
 {
@@ -32,6 +36,12 @@ final class ApiKeys
     private const NAME_PATTERN = '/^[A-Za-z0-9._@-]{1,64}\z/';
     private const STRUCTURALDOCS_KEY_PATTERN = '/^sd_[0-9a-f]{40}\z/';
     private const DATABASE_PATTERN = '/^[A-Za-z0-9_]{1,64}\z/';
+    /** Why a key was refused (1.12.0): sent as `reason` with the 401. */
+    public const REFUSED_UNKNOWN = 'unknown_key';
+    public const REFUSED_NOT_ACCEPTED = 'structuraldocs_off';
+    public const REFUSED_NO_RIGHTS = 'no_library_rights';
+    public const REFUSED_EXPIRED = 'key_expired';
+    public const REFUSED_REVOKED = 'key_revoked';
     /** MySQL's SQLSTATE for a column the table does not have. */
     private const UNKNOWN_COLUMN = '42S22';
 
@@ -72,17 +82,25 @@ final class ApiKeys
     /** The active user for this key, or null. */
     public function authenticate(?string $key): ?User
     {
-        if ($key !== null && $this->structuralDocs !== null && preg_match(self::STRUCTURALDOCS_KEY_PATTERN, $key) === 1) {
-            return $this->authenticateStructuralDocs($key);
+        $result = $this->check($key);
+        return $result instanceof User ? $result : null;
+    }
+
+    /** The active user for this key, or why it is refused (a REFUSED_* code). */
+    public function check(?string $key): User|string
+    {
+        if ($key !== null && preg_match(self::STRUCTURALDOCS_KEY_PATTERN, $key) === 1) {
+            return $this->structuralDocs === null ? self::REFUSED_NOT_ACCEPTED : $this->authenticateStructuralDocs($key);
         }
         if ($key === null || preg_match(self::KEY_PATTERN, $key) !== 1) {
-            return null;
+            return self::REFUSED_UNKNOWN;
         }
         $statement = $this->pdo->prepare('SELECT id, name, can_write, group_name, last_used_at FROM api_users WHERE key_hash = ? AND revoked_at IS NULL');
         $statement->execute([$this->hash($key)]);
         $row = $statement->fetch();
         if (!$row) {
-            return null;
+            // A revoked key's hash is cleared, so it is not found either.
+            return self::REFUSED_UNKNOWN;
         }
         $now = $this->clock->now();
         // last_used_at is kept to the nearest few minutes, not written on every call.
@@ -94,19 +112,22 @@ final class ApiKeys
 
     /**
      * The library's user for the StructuralDocs account this key belongs to, with
-     * the rights StructuralDocs's administrator gave it; null for a key StructuralDocs
-     * does not have, an account without rights here, or a user revoked
-     * in the library.
+     * the rights StructuralDocs's administrator gave it; otherwise why not: a key
+     * StructuralDocs does not have, one it let expire, an account without rights
+     * here, or a user revoked in the library.
      */
-    private function authenticateStructuralDocs(string $key): ?User
+    private function authenticateStructuralDocs(string $key): User|string
     {
         $account = $this->structuralDocsAccount(hash('sha256', $key));
-        if (!$account || !in_array($account['library'], ['read', 'write'], true)) {
-            return null;
+        if (!$account) {
+            return self::REFUSED_UNKNOWN;
         }
         // A sign-in StructuralDocs has let lapse ends here too (StructuralDocs keeps the time in ms).
         if (($account['expires_at'] ?? null) !== null && (int)$account['expires_at'] < $this->clock->now()->getTimestamp() * 1000) {
-            return null;
+            return self::REFUSED_EXPIRED;
+        }
+        if (!in_array($account['library'], ['read', 'write'], true)) {
+            return self::REFUSED_NO_RIGHTS;
         }
         $canWrite = $account['library'] === 'write';
         $group = preg_match(self::NAME_PATTERN, (string)$account['library_group']) === 1 ? (string)$account['library_group'] : null;
@@ -124,8 +145,11 @@ final class ApiKeys
             }
             $row = $this->structuralDocsUser((int)$account['id']);
         }
-        if (!$row || $row['revoked_at'] !== null) {
-            return null;
+        if (!$row) {
+            return self::REFUSED_UNKNOWN;
+        }
+        if ($row['revoked_at'] !== null) {
+            return self::REFUSED_REVOKED;
         }
         // The rights follow StructuralDocs's; the name stays, so uploads keep their owner's name.
         if ((bool)$row['can_write'] !== $canWrite || $row['group_name'] !== $group) {
