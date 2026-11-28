@@ -208,7 +208,7 @@ final class App
         return match ($reason) {
             ApiKeys::REFUSED_NOT_ACCEPTED => 'This library does not accept StructuralDocs keys: its config.php does not switch them on'
                 . ($this->config->has('onword') ? " (it still has the setting 'onword', which is named 'structuraldocs' since 1.10.0)." : " ('structuraldocs' => ['enabled' => true])."),
-            ApiKeys::REFUSED_NO_RIGHTS => 'This StructuralDocs account may not use the CPT library: StructuralDocs\'s administrator gives it read or upload rights through its group (Administration → Groups).',
+            ApiKeys::REFUSED_NO_RIGHTS => 'This StructuralDocs account or key may not use the CPT library: StructuralDocs\'s administrator gives it read or upload rights through its group (Administration → Groups; a key\'s group under CPT library keys).',
             ApiKeys::REFUSED_EXPIRED => 'This sign-in to StructuralDocs has ended: it was not used for a long time. Sign in again.',
             ApiKeys::REFUSED_REVOKED => 'This account\'s access to the library was revoked by the library\'s administrator.',
             default => 'The library does not know this key: it was removed, or it is not typed in full.',

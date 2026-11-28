@@ -28,6 +28,23 @@ function structuraldocs_account(PDO $pdo, string $email, string $library = '', s
     return $key;
 }
 
+/** StructuralDocs's library_keys (2.19.0): keys its administrator makes for the library, each in a group or none. */
+function structuraldocs_library_keys(PDO $pdo): void
+{
+    $pdo->exec("CREATE TABLE library_keys (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, name VARCHAR(64) NOT NULL UNIQUE,
+        key_hash VARCHAR(64) NOT NULL UNIQUE, key_hint VARCHAR(4) NOT NULL, group_id INT NULL, library VARCHAR(8) NOT NULL DEFAULT '',
+        library_group VARCHAR(64) NOT NULL DEFAULT '', created_at BIGINT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+}
+
+/** A key made in StructuralDocs's CPT library keys tab, with its group's rights; returns the key as shown once. */
+function structuraldocs_library_key(PDO $pdo, string $name, string $library = '', string $group = ''): string
+{
+    $key = 'sdlib_' . bin2hex(random_bytes(20));
+    $pdo->prepare('INSERT INTO library_keys (name, key_hash, key_hint, library, library_group, created_at) VALUES (?, ?, ?, ?, ?, 0)')
+        ->execute([$name, hash('sha256', $key), substr($key, -4), $library, $group]);
+    return $key;
+}
+
 function structuraldocs_rights(PDO $pdo, string $email, string $library, string $group = ''): void
 {
     $pdo->prepare('UPDATE users SET library = ?, library_group = ? WHERE email = ?')->execute([$library, $group, $email]);
@@ -186,5 +203,70 @@ return [
         $plain = new TestApp(['structuraldocs' => ['enabled' => true]]);
         same('alice', $plain->get('/', $plain->keys->create('alice'))->data()['user']);
         throws(InvalidArgumentException::class, fn() => new TestApp(['structuraldocs' => ['enabled' => true, 'database' => 'a`b']]));
+    },
+
+    'a key StructuralDocs\'s administrator made for the library has its group\'s rights (1.13.0)' => function (): void {
+        $t = new TestApp(['structuraldocs' => ['enabled' => true]]);
+        structuraldocs_tables($t->pdo);
+        $before = 'sdlib_' . bin2hex(random_bytes(20));
+        same('unknown_key', $t->get('/', $before)->data()['reason'], 'a StructuralDocs before 2.19.0 has no such keys');
+        structuraldocs_library_keys($t->pdo);
+        $laptop = structuraldocs_library_key($t->pdo, 'Site laptop', 'write', 'Office-Ghent');
+        $reader = structuraldocs_library_key($t->pdo, 'Tablet', 'read', 'Site-team');
+        $none = structuraldocs_library_key($t->pdo, 'Spare', '', '');
+
+        $me = $t->get('/', $laptop)->data();
+        same('Site_laptop', $me['user'], 'named after the key');
+        same(true, $me['canWrite']);
+        same('Office-Ghent', $me['group']);
+        same(false, $t->get('/', $reader)->data()['canWrite']);
+        $refused = $t->get('/', $none)->data();
+        same('no_library_rights', $refused['reason'], 'a key in no group, or in one without rights');
+        check(str_contains($refused['message'], 'CPT library keys'), 'says where a key\'s group is set: ' . $refused['message']);
+        same('unknown_key', $t->get('/', 'sdlib_' . str_repeat('0', 40))->data()['reason'], 'a key StructuralDocs does not have');
+        same('unknown_key', $t->get('/', 'sdlib_short')->data()['reason']);
+
+        // One library user per key, apart from accounts; StructuralDocs's key is not kept here.
+        $t->get('/', $laptop);
+        same(2, (int)$t->pdo->query('SELECT COUNT(*) FROM api_users WHERE structuraldocs_key_id IS NOT NULL')->fetchColumn());
+        same(0, (int)$t->pdo->query('SELECT COUNT(*) FROM api_users WHERE key_hash IS NOT NULL OR structuraldocs_user_id IS NOT NULL')->fetchColumn());
+
+        // It uploads to its group: an account of the same group sees the upload, as the key does.
+        $gef = upload_gef();
+        $created = $t->postJson('/cpt', $laptop, ['name' => 'Site B S1', 'content' => $gef, 'latitude' => 51.0, 'longitude' => 4.0, 'location' => ['method' => 'survey'], 'visibility' => 'group']);
+        same(201, $created->status);
+        $colleague = structuraldocs_account($t->pdo, 'ann@example.com', 'read', 'Office-Ghent');
+        same(200, $t->get('/cpt/' . $created->data()['id'], $colleague)->status, 'an account of the key\'s group');
+        same(404, $t->get('/cpt/' . $created->data()['id'], $reader)->status, 'a key of another group');
+
+        // Its group changed in StructuralDocs: the rights follow, the user stays.
+        $t->pdo->exec("UPDATE library_keys SET library = 'read', library_group = 'Site-team' WHERE name = 'Site laptop'");
+        $now = $t->get('/', $laptop)->data();
+        same([false, 'Site-team', 'Site_laptop'], [$now['canWrite'], $now['group'], $now['user']]);
+        same(403, $t->postJson('/cpt', $laptop, ['name' => 'Site B S2', 'content' => $gef])->status, 'a reader may not upload');
+
+        // Deleted in StructuralDocs, or revoked here: refused.
+        $t->keys->revoke('Tablet');
+        same('key_revoked', $t->get('/', $reader)->data()['reason']);
+        $t->pdo->exec("DELETE FROM library_keys WHERE name = 'Site laptop'");
+        same('unknown_key', $t->get('/', $laptop)->data()['reason']);
+    },
+
+    'a key\'s name the library already has is not taken over; the setting switches these keys too (1.13.0)' => function (): void {
+        $t = new TestApp(['structuraldocs' => ['enabled' => true]]);
+        structuraldocs_tables($t->pdo);
+        structuraldocs_library_keys($t->pdo);
+        $own = $t->keys->create('Tablet');
+        $key = structuraldocs_library_key($t->pdo, 'Tablet', 'read', 'Site-team');
+        $name = $t->get('/', $key)->data()['user'];
+        check(str_starts_with($name, 'Tablet-sdk'), "a name of its own, got {$name}");
+        same('Tablet', $t->get('/', $own)->data()['user']);
+
+        $off = new TestApp();
+        structuraldocs_tables($off->pdo);
+        structuraldocs_library_keys($off->pdo);
+        $key = structuraldocs_library_key($off->pdo, 'Tablet', 'write', 'Office');
+        same('structuraldocs_off', $off->get('/', $key)->data()['reason']);
+        same(0, (int)$off->pdo->query('SELECT COUNT(*) FROM api_users')->fetchColumn());
     },
 ];
